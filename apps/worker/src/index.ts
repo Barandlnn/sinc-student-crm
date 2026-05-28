@@ -81,12 +81,65 @@ app.get("/api/health", (c) => {
 });
 
 // Current user mock endpoint
-// Daha sonra Supabase Auth token'dan gerçek user/profile döndüreceğiz.
-app.get("/api/me", (c) => {
+// Current user endpoint from Supabase Auth token
+app.get("/api/me", async (c) => {
+  const supabase = createSupabaseAdmin(c.env);
+
+  const authHeader = c.req.header("Authorization");
+
+  if (!authHeader) {
+    return c.json({ error: "Missing authorization token" }, 401);
+  }
+
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Invalid authorization format" }, 401);
+  }
+
+  const token = authHeader.slice("Bearer ".length);
+
+  const { data, error: userError } = await supabase.auth.getUser(token);
+
+  if (userError || !data.user) {
+    return c.json({ error: "Invalid or expired token" }, 401);
+  }
+
+  const user = data.user;
+
+  const { data: profileById } = await supabase
+    .from("profiles")
+    .select("id, email, full_name, role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  let profile = profileById;
+
+  if (!profile && user.email) {
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, email, full_name, role")
+      .eq("email", user.email)
+      .maybeSingle();
+
+    profile = profileByEmail;
+  }
+
+  if (!profile) {
+    return c.json(
+      {
+        error: "Profile not found",
+        userId: user.id,
+        userEmail: user.email,
+      },
+      404
+    );
+  }
+
   return c.json({
-    id: "mock-manager-id",
-    fullName: "Demo Manager",
-    role: "manager",
+    user: {
+      id: user.id,
+      email: user.email,
+    },
+    profile,
   });
 });
 

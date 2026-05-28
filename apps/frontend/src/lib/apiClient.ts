@@ -1,29 +1,48 @@
+import { supabase } from "./supabaseClient";
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-type ApiRequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
-  body?: unknown;
-  token?: string;
+if (!API_BASE_URL) {
+  throw new Error("Missing VITE_API_BASE_URL");
+}
+
+type ApiOptions = RequestInit & {
+  auth?: boolean;
 };
 
-export async function apiRequest<T>(
+export async function apiFetch<T>(
   path: string,
-  options: ApiRequestOptions = {},
+  options: ApiOptions = {}
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
+  const headers = new Headers(options.headers);
 
-      // Supabase Auth bağlayınca token'ı buraya ekleyeceğiz.
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
+  headers.set("Content-Type", "application/json");
+
+  if (options.auth !== false) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session?.access_token) {
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers,
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    const errorText = await response.text();
+
+    throw new Error(
+      errorText || `API request failed with status ${response.status}`
+    );
   }
 
   return response.json() as Promise<T>;
 }
+
+// Eski sayfalar hâlâ apiRequest kullandığı için bunu alias olarak bırakıyoruz.
+export const apiRequest = apiFetch;

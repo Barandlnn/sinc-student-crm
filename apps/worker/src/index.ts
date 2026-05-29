@@ -333,7 +333,37 @@ app.get(
       return c.json({ error: error.message }, 500);
     }
 
-    return c.json(data ?? []);
+    const conversations = (data ?? []) as any[];
+
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email");
+
+    if (profilesError) {
+      return c.json({ error: profilesError.message }, 500);
+    }
+
+    const profileNameById = new Map<string, string>();
+
+    for (const item of profiles ?? []) {
+      profileNameById.set(
+        item.id,
+        item.full_name ?? item.email ?? "Unknown User"
+      );
+    }
+
+    const enrichedConversations = conversations.map((conversation) => {
+      const assignedTo = conversation.assigned_to as string | null;
+
+      return {
+        ...conversation,
+        assigned_to_name: assignedTo
+          ? profileNameById.get(assignedTo) ?? assignedTo
+          : null,
+      };
+    });
+
+    return c.json(enrichedConversations);
   }
 );
 
@@ -527,7 +557,10 @@ app.patch(
       return c.json({ error: updateError.message }, 500);
     }
 
-    return c.json(updatedThread);
+    return c.json({
+      ...updatedThread,
+      assigned_to_name: profile.full_name ?? profile.email ?? "Unknown User",
+    });
   }
 );
 

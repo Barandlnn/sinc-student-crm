@@ -11,6 +11,7 @@ type ConversationThread = {
   id: string;
   client_id: string;
   assigned_to: string | null;
+  assigned_to_name: string | null;
   subject: string;
   status: string;
   last_message_at: string | null;
@@ -252,11 +253,11 @@ export function ConversationsPage() {
                 </div>
 
                 <div className="mt-3 text-sm text-slate-600">
-                  {conversation.assigned_to ? (
-                    <span>Assigned</span>
-                  ) : (
-                    <span>Unassigned</span>
-                  )}
+                 {conversation.assigned_to ? (
+                  <span>Assigned to {conversation.assigned_to_name ?? "Unknown User"}</span>
+                          ) : (
+                            <span>Unassigned</span>
+                          )}
 
                   {conversation.last_message_at && (
                     <span className="ml-3">
@@ -287,11 +288,13 @@ export function ConversationsPage() {
               </p>
 
               <p className="text-sm text-slate-600">
-                Assigned to:{" "}
-                <span className="font-medium">
-                  {selectedConversation.assigned_to ?? "Unassigned"}
-                </span>
-              </p>
+  Assigned to:{" "}
+  <span className="font-medium">
+    {selectedConversation.assigned_to
+      ? selectedConversation.assigned_to_name ?? "Unknown User"
+      : "Unassigned"}
+  </span>
+</p>
 
               {canAssignConversation && (
                 <button

@@ -1,24 +1,20 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
-import { createMiddleware } from "hono/factory";
 
 import { createSupabaseAdmin, type Env } from "./lib/supabaseAdmin";
 
-type AppRole = "manager" | "sales" | "client";
+type Role = "manager" | "sales" | "client";
 
 type Profile = {
   id: string;
-  email: string | null;
   full_name: string | null;
-  role: AppRole;
+  email: string;
+  role: Role;
 };
 
 type AppVariables = {
-  user: {
-    id: string;
-    email: string | null;
-  };
   profile: Profile;
+  accessToken: string;
 };
 
 const app = new Hono<{
@@ -29,130 +25,120 @@ const app = new Hono<{
 app.use(
   "/api/*",
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:5174",
-    ],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
   })
 );
 
-app.get("/", (c) => {
-  return c.text("Student CRM Worker API is running.");
-});
-
-app.get("/api/health", (c) => {
-  return c.json({
-    ok: true,
-    service: "student-crm-worker",
-  });
-});
-
-const authMiddleware = createMiddleware<{
+const authMiddleware: MiddlewareHandler<{
   Bindings: Env;
   Variables: AppVariables;
-}>(async (c, next) => {
+}> = async (c, next) => {
+  if (c.req.method === "OPTIONS" || c.req.path === "/api/health") {
+    return next();
+  }
+
   const authHeader = c.req.header("Authorization");
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return c.json(
-      {
-        error: "Unauthorized",
-        message: "Missing Authorization bearer token.",
-      },
-      401
-    );
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
   const token = authHeader.replace("Bearer ", "").trim();
+
+  if (!token) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
   const supabase = createSupabaseAdmin(c.env);
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(token);
+  const { data: userData, error: userError } = await supabase.auth.getUser(
+    token
+  );
 
-  if (userError || !user) {
-    return c.json(
-      {
-        error: "Unauthorized",
-        message: "Invalid or expired token.",
-      },
-      401
-    );
+  if (userError || !userData.user) {
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id, email, full_name, role")
-    .eq("id", user.id)
-    .single();
+    .select("id, full_name, email, role")
+    .eq("id", userData.user.id)
+    .maybeSingle();
 
-  if (profileError || !profile) {
-    return c.json(
-      {
-        error: "Profile not found",
-        message: profileError?.message ?? "No matching profile record.",
-      },
-      404
-    );
+  if (profileError) {
+    return c.json({ error: profileError.message }, 500);
   }
 
-  c.set("user", {
-    id: user.id,
-    email: user.email ?? null,
+  if (!profile) {
+    return c.json({ error: "Profile not found" }, 404);
+  }
+
+  c.set("profile", {
+    id: profile.id,
+    full_name: profile.full_name,
+    email: profile.email,
+    role: profile.role as Role,
   });
 
-  c.set("profile", profile as Profile);
+  c.set("accessToken", token);
 
-  await next();
-});
+  return next();
+};
 
-function requireRoles(...allowedRoles: AppRole[]) {
-  return createMiddleware<{
+function requireRoles(...allowedRoles: Role[]) {
+  const middleware: MiddlewareHandler<{
     Bindings: Env;
     Variables: AppVariables;
-  }>(async (c, next) => {
+  }> = async (c, next) => {
     const profile = c.get("profile");
 
-    if (!profile) {
-      return c.json(
-        {
-          error: "Unauthorized",
-          message: "Profile is missing from request context.",
-        },
-        401
-      );
-    }
-
     if (!allowedRoles.includes(profile.role)) {
-      return c.json(
-        {
-          error: "Forbidden",
-          message: `This endpoint requires one of these roles: ${allowedRoles.join(
-            ", "
-          )}`,
-        },
-        403
-      );
+      return c.json({ error: "Forbidden" }, 403);
     }
 
-    await next();
-  });
+    return next();
+  };
+
+  return middleware;
+}
+
+function parseNumberOrNull(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const numberValue = Number(value);
+
+  if (Number.isNaN(numberValue)) {
+    return null;
+  }
+
+  return numberValue;
+}
+
+function toActivityTimestamp(value: unknown) {
+  if (!value || typeof value !== "string") {
+    return new Date(0).toISOString();
+  }
+
+  return value;
 }
 
 app.use("/api/*", authMiddleware);
 
-app.get("/api/me", async (c) => {
-  const user = c.get("user");
+app.get("/api/health", (c) => {
+  return c.json({
+    ok: true,
+    service: "sinc-student-crm-worker",
+  });
+});
+
+app.get("/api/me", requireRoles("manager", "sales", "client"), async (c) => {
   const profile = c.get("profile");
 
   return c.json({
-    user,
     profile,
   });
 });
@@ -160,9 +146,9 @@ app.get("/api/me", async (c) => {
 app.get("/api/staff", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 
-  const { data, error } = await supabase
+  const { data: staff, error } = await supabase
     .from("profiles")
-    .select("id, email, full_name, role")
+    .select("id, full_name, email, role")
     .in("role", ["manager", "sales"])
     .order("full_name", { ascending: true });
 
@@ -170,121 +156,160 @@ app.get("/api/staff", requireRoles("manager", "sales"), async (c) => {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json(data ?? []);
+  return c.json(staff ?? []);
 });
 
-app.get("/api/dashboard", requireRoles("manager", "sales"), async (c) => {
-  const supabase = createSupabaseAdmin(c.env);
+app.get(
+  "/api/dashboard",
+  requireRoles("manager", "sales"),
+  async (c) => {
+    const supabase = createSupabaseAdmin(c.env);
 
-  const [conversationsResult, dealsResult, profilesResult] = await Promise.all([
-    supabase.from("conversation_threads").select("*"),
-    supabase.from("deals").select("*"),
-    supabase.from("profiles").select("id, email, full_name, role"),
-  ]);
+    const { data: conversations, error: conversationsError } = await supabase
+      .from("conversation_threads")
+      .select("*")
+      .order("last_message_at", { ascending: false });
 
-  if (conversationsResult.error) {
-    return c.json({ error: conversationsResult.error.message }, 500);
-  }
-
-  if (dealsResult.error) {
-    return c.json({ error: dealsResult.error.message }, 500);
-  }
-
-  if (profilesResult.error) {
-    return c.json({ error: profilesResult.error.message }, 500);
-  }
-
-  const conversations = (conversationsResult.data ?? []) as any[];
-  const deals = (dealsResult.data ?? []) as any[];
-  const profiles = (profilesResult.data ?? []) as any[];
-
-  const conversationsByStatus = {
-    open: 0,
-    pending: 0,
-    closed: 0,
-  };
-
-  for (const conversation of conversations) {
-    const status = String(conversation.status ?? "open").toLowerCase();
-
-    if (status === "closed") {
-      conversationsByStatus.closed += 1;
-    } else if (status === "pending") {
-      conversationsByStatus.pending += 1;
-    } else {
-      conversationsByStatus.open += 1;
+    if (conversationsError) {
+      return c.json({ error: conversationsError.message }, 500);
     }
-  }
 
-  const unassignedConversations = conversations.filter((conversation) => {
-    const assignedUser =
-      conversation.assigned_to ??
-      conversation.assigned_to_id ??
-      conversation.assignee_id ??
-      null;
+    const { data: deals, error: dealsError } = await supabase
+      .from("deals")
+      .select("*")
+      .order("updated_at", { ascending: false });
 
-    return !assignedUser;
-  }).length;
+    if (dealsError) {
+      return c.json({ error: dealsError.message }, 500);
+    }
 
-  const dealsByStage: Record<string, number> = {};
+    const conversationRows = (conversations ?? []) as any[];
+    const dealRows = (deals ?? []) as any[];
 
-  for (const deal of deals) {
-    const stage = String(deal.stage ?? "unknown").toLowerCase();
-    dealsByStage[stage] = (dealsByStage[stage] ?? 0) + 1;
-  }
+    const openChats = conversationRows.length;
 
-  const profileNameById = new Map<string, string>();
+    const unassignedConversations = conversationRows.filter(
+      (conversation) => !conversation.assigned_to
+    ).length;
 
-  for (const profile of profiles) {
-    profileNameById.set(
-      profile.id,
-      profile.full_name ?? profile.email ?? "Unknown Owner"
+    const activeDeals = dealRows.filter(
+      (deal) => deal.stage !== "won" && deal.stage !== "lost"
+    ).length;
+
+    const wonDeals = dealRows.filter((deal) => deal.stage === "won").length;
+
+    const dealsByStage = dealRows.reduce<Record<string, number>>(
+      (acc, deal) => {
+        const stage = deal.stage ?? "unknown";
+        acc[stage] = (acc[stage] ?? 0) + 1;
+        return acc;
+      },
+      {}
     );
+
+    const ownerIds = [
+      ...new Set(dealRows.map((deal) => deal.owner_id).filter(Boolean)),
+    ] as string[];
+
+    let staffById = new Map<string, any>();
+
+    if (ownerIds.length > 0) {
+      const { data: staff, error: staffError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("id", ownerIds);
+
+      if (staffError) {
+        return c.json({ error: staffError.message }, 500);
+      }
+
+      staffById = new Map(
+        ((staff ?? []) as any[]).map((person) => [person.id, person])
+      );
+    }
+
+    const dealsByOwner = dealRows.reduce<Record<string, number>>(
+      (acc, deal) => {
+        const owner = deal.owner_id
+          ? staffById.get(deal.owner_id)
+          : null;
+
+        const ownerName =
+          owner?.full_name ?? owner?.email ?? deal.owner_id ?? "Unassigned";
+
+        acc[ownerName] = (acc[ownerName] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
+
+    const recentConversationActivity = conversationRows.map((conversation) => ({
+      id: `conversation-${conversation.id}`,
+      type: "conversation",
+      title: conversation.title ?? conversation.subject ?? "Conversation",
+      description: conversation.assigned_to
+        ? "Conversation assigned"
+        : "Conversation unassigned",
+      timestamp: conversation.last_message_at ?? conversation.created_at,
+    }));
+
+    const recentDealActivity = dealRows.map((deal) => ({
+      id: `deal-${deal.id}`,
+      type: "deal",
+      title: deal.title,
+      description: `Deal stage: ${deal.stage}`,
+      timestamp: deal.updated_at ?? deal.created_at,
+    }));
+
+    const recentActivity = [
+      ...recentConversationActivity,
+      ...recentDealActivity,
+    ]
+      .filter((item) => Boolean(item.timestamp))
+      .sort(
+        (a, b) =>
+          new Date(toActivityTimestamp(b.timestamp)).getTime() -
+          new Date(toActivityTimestamp(a.timestamp)).getTime()
+      )
+      .slice(0, 8);
+
+    return c.json({
+      openChats,
+      open_chats: openChats,
+
+      unassigned: unassignedConversations,
+      unassignedConversations,
+      unassigned_conversations: unassignedConversations,
+
+      activeDeals,
+      active_deals: activeDeals,
+
+      wonDeals,
+      won_deals: wonDeals,
+
+      dealsByStage,
+      deals_by_stage: dealsByStage,
+
+      dealsByOwner,
+      deals_by_owner: dealsByOwner,
+
+      recentActivity,
+      recent_activity: recentActivity,
+
+      stats: {
+        openChats,
+        unassignedConversations,
+        activeDeals,
+        wonDeals,
+      },
+    });
   }
-
-  const dealsByOwnerMap = new Map<string, number>();
-
-  for (const deal of deals) {
-    const ownerId =
-      deal.owner_id ??
-      deal.assigned_to ??
-      deal.assigned_to_id ??
-      deal.sales_id ??
-      null;
-
-    const ownerName = ownerId
-      ? profileNameById.get(ownerId) ?? "Unknown Owner"
-      : "Unassigned";
-
-    dealsByOwnerMap.set(ownerName, (dealsByOwnerMap.get(ownerName) ?? 0) + 1);
-  }
-
-  const dealsByOwner = Array.from(dealsByOwnerMap.entries()).map(
-    ([ownerName, count]) => ({
-      ownerName,
-      count,
-    })
-  );
-
-  const recentActivity = [
-    `${conversations.length} conversation thread(s) loaded from Supabase.`,
-    `${deals.length} deal(s) loaded from Supabase.`,
-    `${profiles.length} profile record(s) available.`,
-  ];
-
-  return c.json({
-    conversationsByStatus,
-    unassignedConversations,
-    dealsByStage,
-    dealsByOwner,
-    recentActivity,
-  });
-});
+);
 
 app.get("/api/clients", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 
-  const { data, error } = await supabase
+  const { data: clients, error } = await supabase
     .from("clients")
     .select("*")
     .order("created_at", { ascending: false });
@@ -293,7 +318,47 @@ app.get("/api/clients", requireRoles("manager", "sales"), async (c) => {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json(data ?? []);
+  return c.json(clients ?? []);
+});
+
+app.post("/api/clients", requireRoles("manager", "sales"), async (c) => {
+  const supabase = createSupabaseAdmin(c.env);
+
+  const body = await c.req.json<{
+    full_name?: string;
+    email?: string;
+    phone?: string;
+    country?: string;
+    target_country?: string;
+    status?: string;
+    source?: string;
+    notes?: string;
+  }>();
+
+  if (!body.full_name || !body.email) {
+    return c.json({ error: "full_name and email are required" }, 400);
+  }
+
+  const { data: client, error } = await supabase
+    .from("clients")
+    .insert({
+      full_name: body.full_name,
+      email: body.email,
+      phone: body.phone ?? null,
+      country: body.country ?? null,
+      target_country: body.target_country ?? null,
+      status: body.status ?? null,
+      source: body.source ?? null,
+      notes: body.notes ?? null,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  return c.json(client, 201);
 });
 
 app.get(
@@ -337,19 +402,20 @@ app.get(
       return c.json({ error: dealsError.message }, 500);
     }
 
-    const conversationActivity = ((conversations ?? []) as any[]).map(
-      (conversation) => ({
-        id: `conversation-${conversation.id}`,
-        type: "conversation",
-        title: conversation.title ?? conversation.subject ?? "Conversation",
-        description: conversation.assigned_to
-          ? "Conversation assigned"
-          : "Conversation unassigned",
-        timestamp: conversation.last_message_at ?? conversation.created_at,
-      })
-    );
+    const conversationRows = (conversations ?? []) as any[];
+    const dealRows = (deals ?? []) as any[];
 
-    const dealActivity = ((deals ?? []) as any[]).map((deal) => ({
+    const conversationActivity = conversationRows.map((conversation) => ({
+      id: `conversation-${conversation.id}`,
+      type: "conversation",
+      title: conversation.title ?? conversation.subject ?? "Conversation",
+      description: conversation.assigned_to
+        ? "Conversation assigned"
+        : "Conversation unassigned",
+      timestamp: conversation.last_message_at ?? conversation.created_at,
+    }));
+
+    const dealActivity = dealRows.map((deal) => ({
       id: `deal-${deal.id}`,
       type: "deal",
       title: deal.title,
@@ -361,107 +427,192 @@ app.get(
       .filter((item) => Boolean(item.timestamp))
       .sort(
         (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+          new Date(toActivityTimestamp(b.timestamp)).getTime() -
+          new Date(toActivityTimestamp(a.timestamp)).getTime()
       )
       .slice(0, 10);
 
     return c.json({
       client,
-      conversations: conversations ?? [],
-      deals: deals ?? [],
+      conversations: conversationRows,
+      deals: dealRows,
       activity,
     });
   }
 );
 
-app.post("/api/conversations", requireRoles("client"), async (c) => {
-  const profile = c.get("profile");
-  const supabase = createSupabaseAdmin(c.env);
+app.get(
+  "/api/conversations",
+  requireRoles("manager", "sales", "client"),
+  async (c) => {
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
 
-  const body = await c.req.json<{
-    subject?: string;
-    message?: string;
-  }>();
+    let query = supabase
+      .from("conversation_threads")
+      .select("*")
+      .order("last_message_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
-  const subject = body.subject?.trim();
-  const messageBody = body.message?.trim();
+    if (profile.role === "client") {
+      const { data: client, error: clientError } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("email", profile.email)
+        .maybeSingle();
 
-  if (!subject || !messageBody) {
-    return c.json(
-      {
-        error: "Validation Error",
-        message: "Subject and message are required.",
-      },
-      400
-    );
+      if (clientError) {
+        return c.json({ error: clientError.message }, 500);
+      }
+
+      if (!client) {
+        return c.json([]);
+      }
+
+      query = query.eq("client_id", client.id);
+    }
+
+    const { data: conversations, error: conversationsError } = await query;
+
+    if (conversationsError) {
+      return c.json({ error: conversationsError.message }, 500);
+    }
+
+    const conversationRows = (conversations ?? []) as any[];
+
+    const clientIds = [
+      ...new Set(
+        conversationRows
+          .map((conversation) => conversation.client_id)
+          .filter(Boolean)
+      ),
+    ] as string[];
+
+    const assignedUserIds = [
+      ...new Set(
+        conversationRows
+          .map((conversation) => conversation.assigned_to)
+          .filter(Boolean)
+      ),
+    ] as string[];
+
+    let clientsById = new Map<string, any>();
+    let staffById = new Map<string, any>();
+
+    if (clientIds.length > 0) {
+      const { data: clients, error: clientsError } = await supabase
+        .from("clients")
+        .select("id, full_name, email")
+        .in("id", clientIds);
+
+      if (clientsError) {
+        return c.json({ error: clientsError.message }, 500);
+      }
+
+      clientsById = new Map(
+        ((clients ?? []) as any[]).map((client) => [client.id, client])
+      );
+    }
+
+    if (assignedUserIds.length > 0) {
+      const { data: staff, error: staffError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("id", assignedUserIds);
+
+      if (staffError) {
+        return c.json({ error: staffError.message }, 500);
+      }
+
+      staffById = new Map(
+        ((staff ?? []) as any[]).map((person) => [person.id, person])
+      );
+    }
+
+    const enrichedConversations = conversationRows.map((conversation) => ({
+      ...conversation,
+      client: conversation.client_id
+        ? clientsById.get(conversation.client_id) ?? null
+        : null,
+      assigned_profile: conversation.assigned_to
+        ? staffById.get(conversation.assigned_to) ?? null
+        : null,
+    }));
+
+    return c.json(enrichedConversations);
   }
+);
 
-  const { data: client, error: clientError } = await supabase
-    .from("clients")
-    .select("id")
-    .eq("email", profile.email)
-    .maybeSingle();
+app.post(
+  "/api/conversations",
+  requireRoles("client"),
+  async (c) => {
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
 
-  if (clientError) {
-    return c.json({ error: clientError.message }, 500);
+    const body = await c.req.json<{
+      title?: string;
+      subject?: string;
+      body?: string;
+      message?: string;
+      first_message?: string;
+    }>();
+
+    const title = body.title ?? body.subject ?? "New Conversation";
+    const message = body.body ?? body.message ?? body.first_message;
+
+    if (!message || !message.trim()) {
+      return c.json({ error: "Message is required" }, 400);
+    }
+
+    const { data: client, error: clientError } = await supabase
+      .from("clients")
+      .select("id")
+      .eq("email", profile.email)
+      .maybeSingle();
+
+    if (clientError) {
+      return c.json({ error: clientError.message }, 500);
+    }
+
+    if (!client) {
+      return c.json({ error: "Client profile not found" }, 404);
+    }
+
+    const now = new Date().toISOString();
+
+    const { data: conversation, error: conversationError } = await supabase
+      .from("conversation_threads")
+      .insert({
+        client_id: client.id,
+        title,
+        status: "open",
+        last_message_at: now,
+      })
+      .select("*")
+      .single();
+
+    if (conversationError) {
+      return c.json({ error: conversationError.message }, 500);
+    }
+
+    const { error: messageError } = await supabase
+      .from("conversation_messages")
+      .insert({
+        thread_id: conversation.id,
+        sender_id: profile.id,
+        sender_type: "client",
+        body: message.trim(),
+        created_at: now,
+      });
+
+    if (messageError) {
+      return c.json({ error: messageError.message }, 500);
+    }
+
+    return c.json(conversation, 201);
   }
-
-  if (!client) {
-    return c.json(
-      {
-        error: "Client profile not found",
-        message: "No client record matches the logged-in user email.",
-      },
-      404
-    );
-  }
-
-  const now = new Date().toISOString();
-
-  const { data: thread, error: threadError } = await supabase
-    .from("conversation_threads")
-    .insert({
-      client_id: client.id,
-      assigned_to: null,
-      subject,
-      status: "open",
-      last_message_at: now,
-    })
-    .select("*")
-    .single();
-
-  if (threadError) {
-    return c.json({ error: threadError.message }, 500);
-  }
-
-  const { error: messageError } = await supabase
-    .from("conversation_messages")
-    .insert({
-      thread_id: thread.id,
-      sender_id: profile.id,
-      sender_type: "client",
-      body: messageBody,
-    });
-
-  if (messageError) {
-    return c.json(
-      {
-        error: messageError.message,
-        message:
-          "Conversation was created, but the first message could not be saved.",
-      },
-      500
-    );
-  }
-
-  return c.json(
-    {
-      ...thread,
-      assigned_to_name: null,
-    },
-    201
-  );
-});
+);
 
 app.get(
   "/api/conversations/:id/messages",
@@ -475,15 +626,14 @@ app.get(
       .from("conversation_threads")
       .select("*")
       .eq("id", threadId)
-      .single();
+      .maybeSingle();
 
-    if (threadError || !thread) {
-      return c.json(
-        {
-          error: threadError?.message ?? "Conversation not found.",
-        },
-        404
-      );
+    if (threadError) {
+      return c.json({ error: threadError.message }, 500);
+    }
+
+    if (!thread) {
+      return c.json({ error: "Conversation not found" }, 404);
     }
 
     if (profile.role === "client") {
@@ -498,13 +648,7 @@ app.get(
       }
 
       if (!client || thread.client_id !== client.id) {
-        return c.json(
-          {
-            error: "Forbidden",
-            message: "You can only access your own conversations.",
-          },
-          403
-        );
+        return c.json({ error: "Forbidden" }, 403);
       }
     }
 
@@ -518,7 +662,37 @@ app.get(
       return c.json({ error: messagesError.message }, 500);
     }
 
-    return c.json(messages ?? []);
+    const messageRows = (messages ?? []) as any[];
+
+    const senderIds = [
+      ...new Set(messageRows.map((message) => message.sender_id).filter(Boolean)),
+    ] as string[];
+
+    let profilesById = new Map<string, any>();
+
+    if (senderIds.length > 0) {
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("id", senderIds);
+
+      if (profilesError) {
+        return c.json({ error: profilesError.message }, 500);
+      }
+
+      profilesById = new Map(
+        ((profiles ?? []) as any[]).map((person) => [person.id, person])
+      );
+    }
+
+    const enrichedMessages = messageRows.map((message) => ({
+      ...message,
+      sender_profile: message.sender_id
+        ? profilesById.get(message.sender_id) ?? null
+        : null,
+    }));
+
+    return c.json(enrichedMessages);
   }
 );
 
@@ -530,32 +704,29 @@ app.post(
     const profile = c.get("profile");
     const supabase = createSupabaseAdmin(c.env);
 
-    const body = await c.req.json<{ body?: string }>();
-    const messageBody = body.body?.trim();
+    const body = await c.req.json<{
+      body?: string;
+      message?: string;
+    }>();
 
-    if (!messageBody) {
-      return c.json(
-        {
-          error: "Validation Error",
-          message: "Message body is required.",
-        },
-        400
-      );
+    const messageBody = body.body ?? body.message;
+
+    if (!messageBody || !messageBody.trim()) {
+      return c.json({ error: "Message body is required" }, 400);
     }
 
     const { data: thread, error: threadError } = await supabase
       .from("conversation_threads")
       .select("*")
       .eq("id", threadId)
-      .single();
+      .maybeSingle();
 
-    if (threadError || !thread) {
-      return c.json(
-        {
-          error: threadError?.message ?? "Conversation not found.",
-        },
-        404
-      );
+    if (threadError) {
+      return c.json({ error: threadError.message }, 500);
+    }
+
+    if (!thread) {
+      return c.json({ error: "Conversation not found" }, 404);
     }
 
     if (profile.role === "client") {
@@ -570,26 +741,20 @@ app.post(
       }
 
       if (!client || thread.client_id !== client.id) {
-        return c.json(
-          {
-            error: "Forbidden",
-            message: "You can only send messages to your own conversations.",
-          },
-          403
-        );
+        return c.json({ error: "Forbidden" }, 403);
       }
     }
 
     const now = new Date().toISOString();
-    const senderType = profile.role === "client" ? "client" : "staff";
 
     const { data: message, error: messageError } = await supabase
       .from("conversation_messages")
       .insert({
         thread_id: threadId,
         sender_id: profile.id,
-        sender_type: senderType,
-        body: messageBody,
+        sender_type: profile.role === "client" ? "client" : "staff",
+        body: messageBody.trim(),
+        created_at: now,
       })
       .select("*")
       .single();
@@ -598,7 +763,7 @@ app.post(
       return c.json({ error: messageError.message }, 500);
     }
 
-    const { error: updateThreadError } = await supabase
+    const { error: updateError } = await supabase
       .from("conversation_threads")
       .update({
         last_message_at: now,
@@ -606,8 +771,8 @@ app.post(
       })
       .eq("id", threadId);
 
-    if (updateThreadError) {
-      return c.json({ error: updateThreadError.message }, 500);
+    if (updateError) {
+      return c.json({ error: updateError.message }, 500);
     }
 
     return c.json(message, 201);
@@ -622,24 +787,9 @@ app.patch(
     const profile = c.get("profile");
     const supabase = createSupabaseAdmin(c.env);
 
-    const { data: thread, error: threadError } = await supabase
-      .from("conversation_threads")
-      .select("*")
-      .eq("id", threadId)
-      .single();
-
-    if (threadError || !thread) {
-      return c.json(
-        {
-          error: threadError?.message ?? "Conversation not found.",
-        },
-        404
-      );
-    }
-
     const now = new Date().toISOString();
 
-    const { data: updatedThread, error: updateError } = await supabase
+    const { data: conversation, error } = await supabase
       .from("conversation_threads")
       .update({
         assigned_to: profile.id,
@@ -647,16 +797,17 @@ app.patch(
       })
       .eq("id", threadId)
       .select("*")
-      .single();
+      .maybeSingle();
 
-    if (updateError) {
-      return c.json({ error: updateError.message }, 500);
+    if (error) {
+      return c.json({ error: error.message }, 500);
     }
 
-    return c.json({
-      ...updatedThread,
-      assigned_to_name: profile.full_name ?? profile.email ?? "Unknown User",
-    });
+    if (!conversation) {
+      return c.json({ error: "Conversation not found" }, 404);
+    }
+
+    return c.json(conversation);
   }
 );
 
@@ -669,55 +820,53 @@ app.patch(
 
     const body = await c.req.json<{
       assigned_to?: string;
+      staff_id?: string;
     }>();
 
-    const assignedTo = body.assigned_to?.trim();
+    const staffId = body.assigned_to ?? body.staff_id;
 
-    if (!assignedTo) {
-      return c.json(
-        {
-          error: "Validation Error",
-          message: "assigned_to is required.",
-        },
-        400
-      );
+    if (!staffId) {
+      return c.json({ error: "assigned_to is required" }, 400);
     }
 
-    const { data: assignee, error: assigneeError } = await supabase
+    const { data: staffUser, error: staffError } = await supabase
       .from("profiles")
-      .select("id, email, full_name, role")
-      .eq("id", assignedTo)
+      .select("id, full_name, email, role")
+      .eq("id", staffId)
       .in("role", ["manager", "sales"])
-      .single();
+      .maybeSingle();
 
-    if (assigneeError || !assignee) {
-      return c.json(
-        {
-          error: assigneeError?.message ?? "Assignee not found.",
-        },
-        404
-      );
+    if (staffError) {
+      return c.json({ error: staffError.message }, 500);
+    }
+
+    if (!staffUser) {
+      return c.json({ error: "Selected staff user is invalid" }, 400);
     }
 
     const now = new Date().toISOString();
 
-    const { data: updatedThread, error: updateError } = await supabase
+    const { data: conversation, error: updateError } = await supabase
       .from("conversation_threads")
       .update({
-        assigned_to: assignee.id,
+        assigned_to: staffId,
         updated_at: now,
       })
       .eq("id", threadId)
       .select("*")
-      .single();
+      .maybeSingle();
 
     if (updateError) {
       return c.json({ error: updateError.message }, 500);
     }
 
+    if (!conversation) {
+      return c.json({ error: "Conversation not found" }, 404);
+    }
+
     return c.json({
-      ...updatedThread,
-      assigned_to_name: assignee.full_name ?? assignee.email ?? "Unknown User",
+      conversation,
+      assigned_to: staffUser,
     });
   }
 );
@@ -725,16 +874,65 @@ app.patch(
 app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 
-  const { data, error } = await supabase
+  const { data: deals, error } = await supabase
     .from("deals")
     .select("*")
-    .order("created_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
   if (error) {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json(data ?? []);
+  const dealRows = (deals ?? []) as any[];
+
+  const clientIds = [
+    ...new Set(dealRows.map((deal) => deal.client_id).filter(Boolean)),
+  ] as string[];
+
+  const ownerIds = [
+    ...new Set(dealRows.map((deal) => deal.owner_id).filter(Boolean)),
+  ] as string[];
+
+  let clientsById = new Map<string, any>();
+  let ownersById = new Map<string, any>();
+
+  if (clientIds.length > 0) {
+    const { data: clients, error: clientsError } = await supabase
+      .from("clients")
+      .select("id, full_name, email")
+      .in("id", clientIds);
+
+    if (clientsError) {
+      return c.json({ error: clientsError.message }, 500);
+    }
+
+    clientsById = new Map(
+      ((clients ?? []) as any[]).map((client) => [client.id, client])
+    );
+  }
+
+  if (ownerIds.length > 0) {
+    const { data: owners, error: ownersError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role")
+      .in("id", ownerIds);
+
+    if (ownersError) {
+      return c.json({ error: ownersError.message }, 500);
+    }
+
+    ownersById = new Map(
+      ((owners ?? []) as any[]).map((owner) => [owner.id, owner])
+    );
+  }
+
+  const enrichedDeals = dealRows.map((deal) => ({
+    ...deal,
+    client: deal.client_id ? clientsById.get(deal.client_id) ?? null : null,
+    owner_profile: deal.owner_id ? ownersById.get(deal.owner_id) ?? null : null,
+  }));
+
+  return c.json(enrichedDeals);
 });
 
 app.post("/api/deals", requireRoles("manager", "sales"), async (c) => {
@@ -745,175 +943,174 @@ app.post("/api/deals", requireRoles("manager", "sales"), async (c) => {
     client_id?: string;
     title?: string;
     stage?: string;
+    value?: number | string | null;
+    currency?: string;
+    expected_close_date?: string | null;
   }>();
 
-  const clientId = body.client_id?.trim();
-  const title = body.title?.trim();
-  const stage = body.stage?.trim() || "new_lead";
-
-  const allowedStages = [
-    "new_lead",
-    "contacted",
-    "consultation_booked",
-    "proposal_sent",
-    "won",
-    "lost",
-  ];
-
-  if (!clientId || !title) {
-    return c.json(
-      {
-        error: "Validation Error",
-        message: "Client and deal title are required.",
-      },
-      400
-    );
-  }
-
-  if (!allowedStages.includes(stage)) {
-    return c.json(
-      {
-        error: "Validation Error",
-        message: "Invalid deal stage.",
-      },
-      400
-    );
+  if (!body.client_id || !body.title) {
+    return c.json({ error: "client_id and title are required" }, 400);
   }
 
   const { data: client, error: clientError } = await supabase
     .from("clients")
     .select("id")
-    .eq("id", clientId)
-    .single();
+    .eq("id", body.client_id)
+    .maybeSingle();
 
-  if (clientError || !client) {
-    return c.json(
-      {
-        error: clientError?.message ?? "Client not found.",
-      },
-      404
-    );
+  if (clientError) {
+    return c.json({ error: clientError.message }, 500);
   }
 
-  const { data: deal, error: dealError } = await supabase
-    .from("deals")
-    .insert({
-      client_id: clientId,
-      owner_id: profile.id,
-      title,
-      stage,
-    })
-    .select("*")
-    .single();
-
-  if (dealError) {
-    return c.json({ error: dealError.message }, 500);
+  if (!client) {
+    return c.json({ error: "Client not found" }, 404);
   }
 
-  return c.json(deal, 201);
-});
+  const now = new Date().toISOString();
 
-app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
-  const id = c.req.param("id");
-  const supabase = createSupabaseAdmin(c.env);
+  const dealInsert: Record<string, unknown> = {
+    client_id: body.client_id,
+    owner_id: profile.id,
+    title: body.title,
+    stage: body.stage ?? "new_lead",
+    value: parseNumberOrNull(body.value),
+    currency: body.currency ?? "USD",
+    created_at: now,
+    updated_at: now,
+  };
 
-  const { data, error } = await supabase
+  if (body.expected_close_date) {
+    dealInsert.expected_close_date = body.expected_close_date;
+  }
+
+  const { data: deal, error } = await supabase
     .from("deals")
+    .insert(dealInsert)
     .select("*")
-    .eq("id", id)
     .single();
 
   if (error) {
     return c.json({ error: error.message }, 500);
   }
 
-  return c.json(data);
+  return c.json(deal, 201);
+});
+
+app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
+  const dealId = c.req.param("id");
+  const supabase = createSupabaseAdmin(c.env);
+
+  const { data: deal, error } = await supabase
+    .from("deals")
+    .select("*")
+    .eq("id", dealId)
+    .maybeSingle();
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  if (!deal) {
+    return c.json({ error: "Deal not found" }, 404);
+  }
+
+  let client = null;
+  let ownerProfile = null;
+
+  if (deal.client_id) {
+    const { data: clientData, error: clientError } = await supabase
+      .from("clients")
+      .select("id, full_name, email")
+      .eq("id", deal.client_id)
+      .maybeSingle();
+
+    if (clientError) {
+      return c.json({ error: clientError.message }, 500);
+    }
+
+    client = clientData;
+  }
+
+  if (deal.owner_id) {
+    const { data: ownerData, error: ownerError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role")
+      .eq("id", deal.owner_id)
+      .maybeSingle();
+
+    if (ownerError) {
+      return c.json({ error: ownerError.message }, 500);
+    }
+
+    ownerProfile = ownerData;
+  }
+
+  return c.json({
+    ...deal,
+    client,
+    owner_profile: ownerProfile,
+  });
 });
 
 app.patch(
   "/api/deals/:id/stage",
   requireRoles("manager", "sales"),
   async (c) => {
-    const id = c.req.param("id");
+    const dealId = c.req.param("id");
     const profile = c.get("profile");
     const supabase = createSupabaseAdmin(c.env);
 
-    const body = await c.req.json<{ stage?: string }>();
-    const nextStage = body.stage?.trim();
+    const body = await c.req.json<{
+      stage?: string;
+    }>();
 
-    const allowedStages = [
-      "new_lead",
-      "contacted",
-      "consultation_booked",
-      "proposal_sent",
-      "won",
-      "lost",
-    ];
-
-    if (!nextStage || !allowedStages.includes(nextStage)) {
-      return c.json(
-        {
-          error: "Validation Error",
-          message: "Invalid deal stage.",
-        },
-        400
-      );
+    if (!body.stage) {
+      return c.json({ error: "stage is required" }, 400);
     }
 
-    const { data: currentDeal, error: currentDealError } = await supabase
+    const { data: existingDeal, error: existingDealError } = await supabase
       .from("deals")
       .select("*")
-      .eq("id", id)
-      .single();
+      .eq("id", dealId)
+      .maybeSingle();
 
-    if (currentDealError || !currentDeal) {
-      return c.json(
-        {
-          error: currentDealError?.message ?? "Deal not found.",
-        },
-        404
-      );
+    if (existingDealError) {
+      return c.json({ error: existingDealError.message }, 500);
     }
 
-    const previousStage = currentDeal.stage;
+    if (!existingDeal) {
+      return c.json({ error: "Deal not found" }, 404);
+    }
+
     const now = new Date().toISOString();
 
-    const { data: updatedDeal, error: updateError } = await supabase
+    const { data: deal, error } = await supabase
       .from("deals")
       .update({
-        stage: nextStage,
+        stage: body.stage,
         updated_at: now,
       })
-      .eq("id", id)
+      .eq("id", dealId)
       .select("*")
-      .single();
+      .maybeSingle();
 
-    if (updateError) {
-      return c.json({ error: updateError.message }, 500);
+    if (error) {
+      return c.json({ error: error.message }, 500);
     }
 
-    const { error: historyError } = await supabase
-      .from("deal_stage_history")
-      .insert({
-        deal_id: id,
-        from_stage: previousStage,
-        to_stage: nextStage,
-        changed_by: profile.id,
-      });
-
-    if (historyError) {
-      return c.json(
-        {
-          error: historyError.message,
-          message:
-            "Deal stage was updated, but stage history could not be saved.",
-          deal: updatedDeal,
-        },
-        500
-      );
+    if (!deal) {
+      return c.json({ error: "Deal not found" }, 404);
     }
 
-    return c.json(updatedDeal);
+    await supabase.from("deal_stage_history").insert({
+      deal_id: dealId,
+      from_stage: existingDeal.stage,
+      to_stage: body.stage,
+      changed_by: profile.id,
+      created_at: now,
+    });
+
+    return c.json(deal);
   }
 );
 
@@ -924,13 +1121,14 @@ app.patch(
     const dealId = c.req.param("id");
     const supabase = createSupabaseAdmin(c.env);
 
-    const body = await c.req.json<{ owner_id?: string }>();
+    const body = await c.req.json<{
+      owner_id?: string;
+    }>();
 
     if (!body.owner_id) {
       return c.json({ error: "owner_id is required" }, 400);
     }
 
-    // Seçilen kişi gerçekten staff mı? Manager/Sales olabilir.
     const { data: staffUser, error: staffError } = await supabase
       .from("profiles")
       .select("id, full_name, email, role")
@@ -946,46 +1144,40 @@ app.patch(
       return c.json({ error: "Selected owner is not a valid staff user" }, 400);
     }
 
-    const { data: updatedDeal, error: updateError } = await supabase
+    const now = new Date().toISOString();
+
+    const { data: deal, error } = await supabase
       .from("deals")
       .update({
         owner_id: body.owner_id,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       })
       .eq("id", dealId)
       .select("*")
       .maybeSingle();
 
-    if (updateError) {
-      return c.json({ error: updateError.message }, 500);
+    if (error) {
+      return c.json({ error: error.message }, 500);
     }
 
-    if (!updatedDeal) {
+    if (!deal) {
       return c.json({ error: "Deal not found" }, 404);
     }
 
     return c.json({
-      deal: updatedDeal,
+      deal,
       owner: staffUser,
     });
   }
 );
 
-app.notFound((c) => {
-  return c.json(
-    {
-      error: "Not Found",
-      path: c.req.path,
-    },
-    404
-  );
-});
+app.onError((error, c) => {
+  const message = error instanceof Error ? error.message : "Unknown error";
 
-app.onError((err, c) => {
   return c.json(
     {
       error: "Internal Server Error",
-      message: err.message,
+      message,
     },
     500
   );

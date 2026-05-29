@@ -8,6 +8,7 @@ import { ClientDetailPage } from "@/pages/ClientDetailPage";
 import { ConversationsPage } from "@/pages/ConversationsPage";
 import { PipelinePage } from "@/pages/PipelinePage";
 import { DealDetailPage } from "@/pages/DealDetailPage";
+import { ProtectedRoute } from "@/lib/auth";
 
 export const router = createBrowserRouter([
   {
@@ -23,7 +24,11 @@ export const router = createBrowserRouter([
         element: <LoginPage />,
       },
       {
-        element: <AppLayout />,
+        element: (
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        ),
         children: [
           {
             path: "dashboard",

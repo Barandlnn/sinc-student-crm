@@ -1,4 +1,5 @@
-import { Link, NavLink, Outlet } from "react-router";
+import { Link, NavLink, Outlet, useNavigate } from "react-router";
+import { useAuth } from "@/lib/auth";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard" },
@@ -8,6 +9,14 @@ const navItems = [
 ];
 
 export function AppLayout() {
+  const navigate = useNavigate();
+  const { profile, logout } = useAuth();
+
+  async function handleLogout() {
+    await logout();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b bg-white">
@@ -21,9 +30,24 @@ export function AppLayout() {
               className="w-64 rounded-lg border px-3 py-2 text-sm"
               placeholder="Search..."
             />
-            <button className="rounded-lg border px-3 py-2 text-sm">
-              User menu
-            </button>
+
+            <div className="flex items-center gap-3 rounded-xl border px-3 py-2">
+              <div className="text-right">
+                <p className="text-sm font-semibold">
+                  {profile?.full_name ?? "User"}
+                </p>
+                <p className="text-xs capitalize text-slate-500">
+                  {profile?.role ?? "unknown"}
+                </p>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Logout
+              </button>
+            </div>
           </div>
         </div>
 

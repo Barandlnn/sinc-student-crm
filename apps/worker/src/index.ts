@@ -367,6 +367,95 @@ app.get(
   }
 );
 
+app.post("/api/conversations", requireRoles("client"), async (c) => {
+  const profile = c.get("profile");
+  const supabase = createSupabaseAdmin(c.env);
+
+  const body = await c.req.json<{
+    subject?: string;
+    message?: string;
+  }>();
+
+  const subject = body.subject?.trim();
+  const messageBody = body.message?.trim();
+
+  if (!subject || !messageBody) {
+    return c.json(
+      {
+        error: "Validation Error",
+        message: "Subject and message are required.",
+      },
+      400
+    );
+  }
+
+  const { data: client, error: clientError } = await supabase
+    .from("clients")
+    .select("id")
+    .eq("email", profile.email)
+    .maybeSingle();
+
+  if (clientError) {
+    return c.json({ error: clientError.message }, 500);
+  }
+
+  if (!client) {
+    return c.json(
+      {
+        error: "Client profile not found",
+        message: "No client record matches the logged-in user email.",
+      },
+      404
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  const { data: thread, error: threadError } = await supabase
+    .from("conversation_threads")
+    .insert({
+      client_id: client.id,
+      assigned_to: null,
+      subject,
+      status: "open",
+      last_message_at: now,
+    })
+    .select("*")
+    .single();
+
+  if (threadError) {
+    return c.json({ error: threadError.message }, 500);
+  }
+
+  const { error: messageError } = await supabase
+    .from("conversation_messages")
+    .insert({
+      thread_id: thread.id,
+      sender_id: profile.id,
+      sender_type: "client",
+      body: messageBody,
+    });
+
+  if (messageError) {
+    return c.json(
+      {
+        error: messageError.message,
+        message:
+          "Conversation was created, but the first message could not be saved.",
+      },
+      500
+    );
+  }
+
+  return c.json(
+    {
+      ...thread,
+      assigned_to_name: null,
+    },
+    201
+  );
+});
+
 app.get(
   "/api/conversations/:id/messages",
   requireRoles("manager", "sales", "client"),
@@ -578,23 +667,6 @@ app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   }
 
   return c.json(data ?? []);
-});
-
-app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
-  const id = c.req.param("id");
-  const supabase = createSupabaseAdmin(c.env);
-
-  const { data, error } = await supabase
-    .from("deals")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  if (error) {
-    return c.json({ error: error.message }, 500);
-  }
-
-  return c.json(data);
 });
 
 app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {

@@ -37,9 +37,14 @@ export function ConversationsPage() {
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [selectedConversationId, setSelectedConversationId] =
     useState<string | null>(null);
+
   const [replyText, setReplyText] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [assignSuccessMessage, setAssignSuccessMessage] = useState("");
+
+  const [newSubject, setNewSubject] = useState("");
+  const [newMessage, setNewMessage] = useState("");
+  const [createChatSuccessMessage, setCreateChatSuccessMessage] = useState("");
 
   const {
     data,
@@ -63,6 +68,42 @@ export function ConversationsPage() {
         `/conversations/${selectedConversationId}/messages`
       ),
     enabled: Boolean(selectedConversationId),
+  });
+
+  const createConversationMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest<ConversationThread>("/conversations", {
+        method: "POST",
+        body: JSON.stringify({
+          subject: newSubject,
+          message: newMessage,
+        }),
+      });
+    },
+
+    onSuccess: (createdConversation) => {
+      setNewSubject("");
+      setNewMessage("");
+      setActiveFilter("all");
+      setSelectedConversationId(createdConversation.id);
+      setCreateChatSuccessMessage("Conversation started successfully.");
+
+      window.setTimeout(() => {
+        setCreateChatSuccessMessage("");
+      }, 3000);
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversations"],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversation-messages", createdConversation.id],
+      });
+    },
+
+    onError: () => {
+      setCreateChatSuccessMessage("");
+    },
   });
 
   const sendMessageMutation = useMutation({
@@ -157,6 +198,16 @@ export function ConversationsPage() {
       (conversation) => conversation.id === selectedConversationId
     ) ?? null;
 
+  function handleCreateConversation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!newSubject.trim() || !newMessage.trim()) {
+      return;
+    }
+
+    createConversationMutation.mutate();
+  }
+
   function handleSendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -168,7 +219,9 @@ export function ConversationsPage() {
   }
 
   const canAssignConversation =
-    profile?.role !== "client" && selectedConversation && !selectedConversation.assigned_to;
+    profile?.role !== "client" &&
+    selectedConversation &&
+    !selectedConversation.assigned_to;
 
   if (isLoading) {
     return <p>Loading conversations...</p>;
@@ -190,6 +243,63 @@ export function ConversationsPage() {
           Conversation queue loaded from the Worker API.
         </p>
       </div>
+
+      {profile?.role === "client" && (
+        <form
+          onSubmit={handleCreateConversation}
+          className="rounded-2xl border bg-white p-5"
+        >
+          <h2 className="text-lg font-semibold">Start a New Chat</h2>
+
+          <p className="mt-1 text-sm text-slate-600">
+            Send a new question to the education sales team.
+          </p>
+
+          <input
+            value={newSubject}
+            onChange={(event) => setNewSubject(event.target.value)}
+            placeholder="Subject, e.g. Canada admission question"
+            className="mt-4 w-full rounded-xl border px-4 py-3 text-sm outline-none"
+          />
+
+          <textarea
+            value={newMessage}
+            onChange={(event) => setNewMessage(event.target.value)}
+            placeholder="Write your message..."
+            rows={4}
+            className="mt-3 w-full resize-none rounded-xl border px-4 py-3 text-sm outline-none"
+          />
+
+          {createConversationMutation.isError && (
+            <p className="mt-2 text-sm text-red-600">
+              Conversation could not be started:{" "}
+              {(createConversationMutation.error as Error).message}
+            </p>
+          )}
+
+          {createChatSuccessMessage && (
+            <p className="mt-2 text-sm text-green-600">
+              {createChatSuccessMessage}
+            </p>
+          )}
+
+          <div className="mt-3 flex justify-end">
+            <button
+              type="submit"
+              disabled={
+                !newSubject.trim() ||
+                !newMessage.trim() ||
+                createConversationMutation.isPending
+              }
+              className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {createConversationMutation.isPending
+                ? "Starting..."
+                : "Start Chat"}
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="rounded-2xl border bg-white p-5">
         <div className="flex gap-2">
@@ -253,11 +363,14 @@ export function ConversationsPage() {
                 </div>
 
                 <div className="mt-3 text-sm text-slate-600">
-                 {conversation.assigned_to ? (
-                  <span>Assigned to {conversation.assigned_to_name ?? "Unknown User"}</span>
-                          ) : (
-                            <span>Unassigned</span>
-                          )}
+                  {conversation.assigned_to ? (
+                    <span>
+                      Assigned to{" "}
+                      {conversation.assigned_to_name ?? "Unknown User"}
+                    </span>
+                  ) : (
+                    <span>Unassigned</span>
+                  )}
 
                   {conversation.last_message_at && (
                     <span className="ml-3">
@@ -288,13 +401,13 @@ export function ConversationsPage() {
               </p>
 
               <p className="text-sm text-slate-600">
-  Assigned to:{" "}
-  <span className="font-medium">
-    {selectedConversation.assigned_to
-      ? selectedConversation.assigned_to_name ?? "Unknown User"
-      : "Unassigned"}
-  </span>
-</p>
+                Assigned to:{" "}
+                <span className="font-medium">
+                  {selectedConversation.assigned_to
+                    ? selectedConversation.assigned_to_name ?? "Unknown User"
+                    : "Unassigned"}
+                </span>
+              </p>
 
               {canAssignConversation && (
                 <button

@@ -926,6 +926,60 @@ app.patch(
   }
 );
 
+app.patch(
+  "/api/deals/:id/assign",
+  requireRoles("manager"),
+  async (c) => {
+    const dealId = c.req.param("id");
+    const supabase = createSupabaseAdmin(c.env);
+
+    const body = await c.req.json<{ owner_id?: string }>();
+
+    if (!body.owner_id) {
+      return c.json({ error: "owner_id is required" }, 400);
+    }
+
+    // Seçilen kişi gerçekten staff mı? Manager/Sales olabilir.
+    const { data: staffUser, error: staffError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role")
+      .eq("id", body.owner_id)
+      .in("role", ["manager", "sales"])
+      .maybeSingle();
+
+    if (staffError) {
+      return c.json({ error: staffError.message }, 500);
+    }
+
+    if (!staffUser) {
+      return c.json({ error: "Selected owner is not a valid staff user" }, 400);
+    }
+
+    const { data: updatedDeal, error: updateError } = await supabase
+      .from("deals")
+      .update({
+        owner_id: body.owner_id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", dealId)
+      .select("*")
+      .maybeSingle();
+
+    if (updateError) {
+      return c.json({ error: updateError.message }, 500);
+    }
+
+    if (!updatedDeal) {
+      return c.json({ error: "Deal not found" }, 404);
+    }
+
+    return c.json({
+      deal: updatedDeal,
+      owner: staffUser,
+    });
+  }
+);
+
 app.notFound((c) => {
   return c.json(
     {

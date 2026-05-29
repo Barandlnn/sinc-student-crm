@@ -19,6 +19,32 @@ type Deal = {
   updated_at: string;
 };
 
+type Profile = {
+  id: string;
+  full_name: string | null;
+  email: string;
+  role: "manager" | "sales" | "client";
+};
+
+type MeResponse =
+  | {
+      profile: Profile;
+    }
+  | Profile;
+
+type StaffProfile = {
+  id: string;
+  full_name: string | null;
+  email: string;
+  role: string;
+};
+
+type StaffResponse =
+  | {
+      staff: StaffProfile[];
+    }
+  | StaffProfile[];
+
 const STAGES = [
   {
     key: "new_lead",
@@ -66,9 +92,31 @@ function formatDate(value: string | null | undefined) {
   return new Date(value).toLocaleString();
 }
 
+function getProfileFromMeResponse(data: MeResponse | undefined) {
+  if (!data) {
+    return null;
+  }
+
+  if ("profile" in data) {
+    return data.profile;
+  }
+
+  return data;
+}
+
 export function DealDetailPage() {
   const { id } = useParams();
   const queryClient = useQueryClient();
+
+  const {
+    data: meData,
+  } = useQuery<MeResponse>({
+    queryKey: ["me"],
+    queryFn: () => apiRequest<MeResponse>("/me"),
+  });
+
+  const currentProfile = getProfileFromMeResponse(meData);
+  const isManager = currentProfile?.role === "manager";
 
   const {
     data: deal,
@@ -79,6 +127,20 @@ export function DealDetailPage() {
     queryKey: ["deal", id],
     queryFn: () => apiRequest<Deal>(`/deals/${id}`),
     enabled: Boolean(id),
+  });
+
+  const staffQuery = useQuery<StaffProfile[]>({
+    queryKey: ["staff"],
+    enabled: isManager,
+    queryFn: async () => {
+      const data = await apiRequest<StaffResponse>("/staff");
+
+      if (Array.isArray(data)) {
+        return data;
+      }
+
+      return data.staff;
+    },
   });
 
   const updateStageMutation = useMutation({
@@ -98,6 +160,35 @@ export function DealDetailPage() {
 
       queryClient.invalidateQueries({
         queryKey: ["deals"],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["dashboard"],
+      });
+    },
+  });
+
+  const reassignOwnerMutation = useMutation({
+    mutationFn: async (ownerId: string) => {
+      return apiRequest(`/deals/${id}/assign`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          owner_id: ownerId,
+        }),
+      });
+    },
+
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["deal", id],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["deals"],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["dashboard"],
       });
     },
   });
@@ -233,6 +324,66 @@ export function DealDetailPage() {
         )}
       </div>
 
+      {isManager && (
+        <div className="rounded-2xl border bg-white p-5">
+          <h2 className="text-lg font-semibold">Reassign Owner</h2>
+
+          <p className="mt-1 text-sm text-slate-600">
+            Manager can assign this deal to another sales or manager user.
+          </p>
+
+          <div className="mt-4 max-w-md">
+            <label className="text-sm font-medium text-slate-600">
+              New Owner
+            </label>
+
+            <select
+              value={deal.owner_id ?? ""}
+              onChange={(event) =>
+                reassignOwnerMutation.mutate(event.target.value)
+              }
+              disabled={staffQuery.isLoading || reassignOwnerMutation.isPending}
+              className="mt-2 w-full rounded-xl border px-4 py-2 text-sm"
+            >
+              <option value="">Select owner</option>
+
+              {staffQuery.data?.map((staff) => (
+                <option key={staff.id} value={staff.id}>
+                  {staff.full_name ?? staff.email} - {staff.role}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {staffQuery.isLoading && (
+            <p className="mt-3 text-sm text-slate-500">Loading staff...</p>
+          )}
+
+          {staffQuery.isError && (
+            <p className="mt-3 text-sm text-red-600">
+              Staff list could not be loaded: {(staffQuery.error as Error).message}
+            </p>
+          )}
+
+          {reassignOwnerMutation.isPending && (
+            <p className="mt-3 text-sm text-slate-500">Updating owner...</p>
+          )}
+
+          {reassignOwnerMutation.isError && (
+            <p className="mt-3 text-sm text-red-600">
+              Owner could not be updated:{" "}
+              {(reassignOwnerMutation.error as Error).message}
+            </p>
+          )}
+
+          {reassignOwnerMutation.isSuccess && (
+            <p className="mt-3 text-sm text-green-600">
+              Owner updated successfully.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="rounded-2xl border bg-white p-5">
         <h2 className="text-lg font-semibold">Deal Information</h2>
 
@@ -255,7 +406,7 @@ export function DealDetailPage() {
         <h2 className="text-lg font-semibold">Next Actions</h2>
 
         <p className="mt-2 text-sm text-slate-600">
-          Deal notes and owner reassignment will be implemented next.
+          Deal notes and owner name display can be implemented next.
         </p>
       </div>
     </div>

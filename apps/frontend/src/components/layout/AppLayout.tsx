@@ -2,15 +2,23 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { useAuth } from "@/lib/auth";
 
 const navItems = [
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/clients", label: "Clients" },
-  { to: "/conversations", label: "Conversations" },
-  { to: "/pipeline", label: "Pipeline" },
+  { to: "/dashboard", label: "Dashboard", roles: ["manager", "sales"] },
+  { to: "/clients", label: "Clients", roles: ["manager", "sales"] },
+  {
+    to: "/conversations",
+    label: "Conversations",
+    roles: ["manager", "sales", "client"],
+  },
+  { to: "/pipeline", label: "Pipeline", roles: ["manager", "sales"] },
 ];
 
 export function AppLayout() {
   const navigate = useNavigate();
   const { profile, logout } = useAuth();
+
+  const visibleNavItems = navItems.filter(
+    (item) => profile && item.roles.includes(profile.role)
+  );
 
   async function handleLogout() {
     await logout();
@@ -52,7 +60,7 @@ export function AppLayout() {
         </div>
 
         <nav className="mx-auto flex max-w-7xl gap-2 px-6 pb-3">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

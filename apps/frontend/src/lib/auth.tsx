@@ -9,7 +9,7 @@ import { Navigate, useLocation } from "react-router";
 import { supabase } from "@/lib/supabaseClient";
 import { apiRequest } from "@/lib/apiClient";
 
-type UserRole = "manager" | "sales" | "client";
+export type UserRole = "manager" | "sales" | "client";
 
 type Profile = {
   id: string;
@@ -124,6 +124,34 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  return children;
+}
+
+export function RoleRoute({
+  children,
+  allowedRoles,
+}: {
+  children: ReactNode;
+  allowedRoles: UserRole[];
+}) {
+  const { profile, isLoading, isAuthenticated } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-700">
+        Checking permissions...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !profile) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (!allowedRoles.includes(profile.role)) {
+    return <Navigate to="/conversations" replace />;
   }
 
   return children;

@@ -8,7 +8,7 @@ import { ClientDetailPage } from "@/pages/ClientDetailPage";
 import { ConversationsPage } from "@/pages/ConversationsPage";
 import { PipelinePage } from "@/pages/PipelinePage";
 import { DealDetailPage } from "@/pages/DealDetailPage";
-import { ProtectedRoute } from "@/lib/auth";
+import { ProtectedRoute, RoleRoute } from "@/lib/auth";
 
 export const router = createBrowserRouter([
   {
@@ -32,27 +32,51 @@ export const router = createBrowserRouter([
         children: [
           {
             path: "dashboard",
-            element: <DashboardPage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales"]}>
+                <DashboardPage />
+              </RoleRoute>
+            ),
           },
           {
             path: "clients",
-            element: <ClientsPage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales"]}>
+                <ClientsPage />
+              </RoleRoute>
+            ),
           },
           {
             path: "clients/:clientId",
-            element: <ClientDetailPage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales"]}>
+                <ClientDetailPage />
+              </RoleRoute>
+            ),
           },
           {
             path: "conversations",
-            element: <ConversationsPage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales", "client"]}>
+                <ConversationsPage />
+              </RoleRoute>
+            ),
           },
           {
             path: "pipeline",
-            element: <PipelinePage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales"]}>
+                <PipelinePage />
+              </RoleRoute>
+            ),
           },
           {
             path: "deals/:dealId",
-            element: <DealDetailPage />,
+            element: (
+              <RoleRoute allowedRoles={["manager", "sales"]}>
+                <DealDetailPage />
+              </RoleRoute>
+            ),
           },
         ],
       },

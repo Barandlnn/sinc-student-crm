@@ -1,5 +1,9 @@
 import { Link, useParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiRequest } from "@/lib/apiClient";
 
 type Deal = {
@@ -14,6 +18,33 @@ type Deal = {
   created_at: string;
   updated_at: string;
 };
+
+const STAGES = [
+  {
+    key: "new_lead",
+    label: "New Lead",
+  },
+  {
+    key: "contacted",
+    label: "Contacted",
+  },
+  {
+    key: "consultation_booked",
+    label: "Consultation Booked",
+  },
+  {
+    key: "proposal_sent",
+    label: "Proposal Sent",
+  },
+  {
+    key: "won",
+    label: "Won",
+  },
+  {
+    key: "lost",
+    label: "Lost",
+  },
+];
 
 function formatStage(stage: string) {
   return stage.replaceAll("_", " ");
@@ -37,6 +68,7 @@ function formatDate(value: string | null | undefined) {
 
 export function DealDetailPage() {
   const { id } = useParams();
+  const queryClient = useQueryClient();
 
   const {
     data: deal,
@@ -47,6 +79,27 @@ export function DealDetailPage() {
     queryKey: ["deal", id],
     queryFn: () => apiRequest<Deal>(`/deals/${id}`),
     enabled: Boolean(id),
+  });
+
+  const updateStageMutation = useMutation({
+    mutationFn: async (stage: string) => {
+      return apiRequest<Deal>(`/deals/${id}/stage`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          stage,
+        }),
+      });
+    },
+
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["deal", id],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["deals"],
+      });
+    },
   });
 
   if (isLoading) {
@@ -137,6 +190,50 @@ export function DealDetailPage() {
       </div>
 
       <div className="rounded-2xl border bg-white p-5">
+        <h2 className="text-lg font-semibold">Update Stage</h2>
+
+        <p className="mt-1 text-sm text-slate-600">
+          Move this deal to a different pipeline stage.
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {STAGES.map((stage) => {
+            const isActive = deal.stage === stage.key;
+
+            return (
+              <button
+                key={stage.key}
+                onClick={() => updateStageMutation.mutate(stage.key)}
+                disabled={isActive || updateStageMutation.isPending}
+                className={`rounded-xl border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isActive ? "bg-slate-950 text-white" : "bg-white"
+                }`}
+              >
+                {stage.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {updateStageMutation.isPending && (
+          <p className="mt-3 text-sm text-slate-500">Updating stage...</p>
+        )}
+
+        {updateStageMutation.isError && (
+          <p className="mt-3 text-sm text-red-600">
+            Stage could not be updated:{" "}
+            {(updateStageMutation.error as Error).message}
+          </p>
+        )}
+
+        {updateStageMutation.isSuccess && (
+          <p className="mt-3 text-sm text-green-600">
+            Stage updated successfully.
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-2xl border bg-white p-5">
         <h2 className="text-lg font-semibold">Deal Information</h2>
 
         <div className="mt-4 divide-y">
@@ -146,7 +243,9 @@ export function DealDetailPage() {
               className="grid gap-2 py-3 text-sm md:grid-cols-3"
             >
               <p className="font-medium text-slate-500">{field.label}</p>
-              <p className="break-all md:col-span-2">{field.value}</p>
+              <p className="break-all capitalize md:col-span-2">
+                {field.value}
+              </p>
             </div>
           ))}
         </div>
@@ -156,8 +255,7 @@ export function DealDetailPage() {
         <h2 className="text-lg font-semibold">Next Actions</h2>
 
         <p className="mt-2 text-sm text-slate-600">
-          Stage update, deal notes, and owner reassignment will be implemented
-          next.
+          Deal notes and owner reassignment will be implemented next.
         </p>
       </div>
     </div>

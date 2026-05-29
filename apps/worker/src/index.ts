@@ -565,6 +565,7 @@ app.patch(
 );
 
 app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
+
   const supabase = createSupabaseAdmin(c.env);
 
   const { data, error } = await supabase
@@ -596,6 +597,115 @@ app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
   return c.json(data);
 });
 
+app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
+  const id = c.req.param("id");
+  const supabase = createSupabaseAdmin(c.env);
+
+  const { data, error } = await supabase
+    .from("deals")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  return c.json(data);
+});
+
+// BURAYA EKLE
+app.patch(
+  "/api/deals/:id/stage",
+  requireRoles("manager", "sales"),
+  async (c) => {
+    const id = c.req.param("id");
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
+
+    const body = await c.req.json<{ stage?: string }>();
+    const nextStage = body.stage?.trim();
+
+    const allowedStages = [
+      "new_lead",
+      "contacted",
+      "consultation_booked",
+      "proposal_sent",
+      "won",
+      "lost",
+    ];
+
+    if (!nextStage || !allowedStages.includes(nextStage)) {
+      return c.json(
+        {
+          error: "Validation Error",
+          message: "Invalid deal stage.",
+        },
+        400
+      );
+    }
+
+    const { data: currentDeal, error: currentDealError } = await supabase
+      .from("deals")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (currentDealError || !currentDeal) {
+      return c.json(
+        {
+          error: currentDealError?.message ?? "Deal not found.",
+        },
+        404
+      );
+    }
+
+    const previousStage = currentDeal.stage;
+    const now = new Date().toISOString();
+
+    const { data: updatedDeal, error: updateError } = await supabase
+      .from("deals")
+      .update({
+        stage: nextStage,
+        updated_at: now,
+      })
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return c.json(
+        {
+          error: updateError.message,
+        },
+        500
+      );
+    }
+
+    const { error: historyError } = await supabase
+      .from("deal_stage_history")
+      .insert({
+        deal_id: id,
+        from_stage: previousStage,
+        to_stage: nextStage,
+        changed_by: profile.id,
+      });
+
+    if (historyError) {
+      return c.json(
+        {
+          error: historyError.message,
+          message:
+            "Deal stage was updated, but stage history could not be saved.",
+          deal: updatedDeal,
+        },
+        500
+      );
+    }
+
+    return c.json(updatedDeal);
+  }
+);
 app.notFound((c) => {
   return c.json(
     {

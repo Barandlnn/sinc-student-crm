@@ -13,6 +13,14 @@ type ConversationThread = {
   updated_at: string;
 };
 
+type ConversationMessage = {
+  id: string;
+  thread_id: string;
+  sender_profile_id: string | null;
+  body: string;
+  created_at: string;
+};
+
 type FilterType = "unassigned" | "mine" | "all";
 
 export function ConversationsPage() {
@@ -30,7 +38,22 @@ export function ConversationsPage() {
     queryFn: () => apiRequest<ConversationThread[]>("/conversations"),
   });
 
+  const {
+    data: messagesData,
+    isLoading: isMessagesLoading,
+    isError: isMessagesError,
+    error: messagesError,
+  } = useQuery<ConversationMessage[]>({
+    queryKey: ["conversation-messages", selectedConversationId],
+    queryFn: () =>
+      apiRequest<ConversationMessage[]>(
+        `/conversations/${selectedConversationId}/messages`
+      ),
+    enabled: Boolean(selectedConversationId),
+  });
+
   const conversations = data ?? [];
+  const messages = messagesData ?? [];
 
   const filteredConversations = useMemo(() => {
     if (activeFilter === "unassigned") {
@@ -153,27 +176,68 @@ export function ConversationsPage() {
 
       <div className="rounded-2xl border bg-white p-5">
         {selectedConversation ? (
-          <div className="space-y-3">
-            <h2 className="text-xl font-semibold">
-              {selectedConversation.subject}
-            </h2>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">
+                {selectedConversation.subject}
+              </h2>
 
-            <p className="text-sm text-slate-600">
-              Status:{" "}
-              <span className="font-medium capitalize">
-                {selectedConversation.status}
-              </span>
-            </p>
+              <p className="mt-1 text-sm text-slate-600">
+                Status:{" "}
+                <span className="font-medium capitalize">
+                  {selectedConversation.status}
+                </span>
+              </p>
 
-            <p className="text-sm text-slate-600">
-              Assigned to:{" "}
-              <span className="font-medium">
-                {selectedConversation.assigned_to ?? "Unassigned"}
-              </span>
-            </p>
+              <p className="text-sm text-slate-600">
+                Assigned to:{" "}
+                <span className="font-medium">
+                  {selectedConversation.assigned_to ?? "Unassigned"}
+                </span>
+              </p>
+            </div>
 
-            <div className="mt-4 rounded-xl border border-dashed p-4 text-sm text-slate-500">
-              Message detail and reply actions will be implemented next.
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <h3 className="font-semibold">Messages</h3>
+
+              {isMessagesLoading && (
+                <p className="mt-3 text-sm text-slate-500">
+                  Loading messages...
+                </p>
+              )}
+
+              {isMessagesError && (
+                <p className="mt-3 text-sm text-red-600">
+                  Messages could not be loaded:{" "}
+                  {(messagesError as Error).message}
+                </p>
+              )}
+
+              {!isMessagesLoading &&
+                !isMessagesError &&
+                messages.length === 0 && (
+                  <p className="mt-3 text-sm text-slate-500">
+                    No messages found.
+                  </p>
+                )}
+
+              <div className="mt-4 space-y-3">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className="rounded-xl border bg-white p-4"
+                  >
+                    <p className="text-sm">{message.body}</p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {new Date(message.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-dashed p-4 text-sm text-slate-500">
+              Reply form will be implemented next.
             </div>
           </div>
         ) : (

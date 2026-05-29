@@ -336,7 +336,64 @@ app.get(
     return c.json(data ?? []);
   }
 );
+app.get(
+  "/api/conversations/:id/messages",
+  requireRoles("manager", "sales", "client"),
+  async (c) => {
+    const threadId = c.req.param("id");
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
 
+    const { data: thread, error: threadError } = await supabase
+      .from("conversation_threads")
+      .select("*")
+      .eq("id", threadId)
+      .single();
+
+    if (threadError || !thread) {
+      return c.json(
+        {
+          error: threadError?.message ?? "Conversation not found.",
+        },
+        404
+      );
+    }
+
+    if (profile.role === "client") {
+      const { data: client, error: clientError } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("email", profile.email)
+        .maybeSingle();
+
+      if (clientError) {
+        return c.json({ error: clientError.message }, 500);
+      }
+
+      if (!client || thread.client_id !== client.id) {
+        return c.json(
+          {
+            error: "Forbidden",
+            message: "You can only access your own conversations.",
+          },
+          403
+        );
+      }
+    }
+
+    const { data: messages, error: messagesError } = await supabase
+      .from("conversation_messages")
+      .select("*")
+      .eq("thread_id", threadId)
+      .order("created_at", { ascending: true });
+
+    if (messagesError) {
+      return c.json({ error: messagesError.message }, 500);
+    }
+
+    return c.json(messages ?? []);
+  }
+);
 app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 

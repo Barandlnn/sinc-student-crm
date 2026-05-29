@@ -1,6 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiRequest } from "@/lib/apiClient";
 
 type Deal = {
@@ -14,6 +18,12 @@ type Deal = {
   expected_close_date?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type Client = {
+  id: string;
+  full_name: string;
+  email: string;
 };
 
 const STAGES = [
@@ -56,7 +66,14 @@ function formatMoney(value: number | null | undefined, currency?: string | null)
 }
 
 export function PipelinePage() {
+  const queryClient = useQueryClient();
+
   const [search, setSearch] = useState("");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [dealTitle, setDealTitle] = useState("");
+  const [dealStage, setDealStage] = useState("new_lead");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const {
     data,
@@ -68,7 +85,51 @@ export function PipelinePage() {
     queryFn: () => apiRequest<Deal[]>("/deals"),
   });
 
+  const {
+    data: clientsData,
+    isLoading: isClientsLoading,
+    isError: isClientsError,
+    error: clientsError,
+  } = useQuery<Client[]>({
+    queryKey: ["clients"],
+    queryFn: () => apiRequest<Client[]>("/clients"),
+  });
+
+  const createDealMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest<Deal>("/deals", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClientId,
+          title: dealTitle,
+          stage: dealStage,
+        }),
+      });
+    },
+
+    onSuccess: () => {
+      setSelectedClientId("");
+      setDealTitle("");
+      setDealStage("new_lead");
+      setShowCreateForm(false);
+      setSuccessMessage("Deal created successfully.");
+
+      window.setTimeout(() => {
+        setSuccessMessage("");
+      }, 3000);
+
+      queryClient.invalidateQueries({
+        queryKey: ["deals"],
+      });
+    },
+
+    onError: () => {
+      setSuccessMessage("");
+    },
+  });
+
   const deals = data ?? [];
+  const clients = clientsData ?? [];
 
   const filteredDeals = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -94,6 +155,16 @@ export function PipelinePage() {
     return deal.stage !== "won" && deal.stage !== "lost";
   });
 
+  function handleCreateDeal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedClientId || !dealTitle.trim()) {
+      return;
+    }
+
+    createDealMutation.mutate();
+  }
+
   if (isLoading) {
     return <p>Loading pipeline...</p>;
   }
@@ -116,10 +187,113 @@ export function PipelinePage() {
           </p>
         </div>
 
-        <button className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-medium text-white">
-          New Deal
+        <button
+          onClick={() => setShowCreateForm((current) => !current)}
+          className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-medium text-white"
+        >
+          {showCreateForm ? "Close Form" : "New Deal"}
         </button>
       </div>
+
+      {showCreateForm && (
+        <form
+          onSubmit={handleCreateDeal}
+          className="rounded-2xl border bg-white p-5"
+        >
+          <h2 className="text-lg font-semibold">Create New Deal</h2>
+
+          <p className="mt-1 text-sm text-slate-600">
+            Create a client deal and assign yourself as the owner.
+          </p>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div>
+              <label className="text-sm font-medium">Client</label>
+
+              <select
+                value={selectedClientId}
+                onChange={(event) => setSelectedClientId(event.target.value)}
+                className="mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none"
+              >
+                <option value="">Select client</option>
+
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.full_name} — {client.email}
+                  </option>
+                ))}
+              </select>
+
+              {isClientsLoading && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Loading clients...
+                </p>
+              )}
+
+              {isClientsError && (
+                <p className="mt-2 text-xs text-red-600">
+                  Clients could not be loaded:{" "}
+                  {(clientsError as Error).message}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Deal Title</label>
+
+              <input
+                value={dealTitle}
+                onChange={(event) => setDealTitle(event.target.value)}
+                placeholder="e.g. Canada Fall 2026 application"
+                className="mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Stage</label>
+
+              <select
+                value={dealStage}
+                onChange={(event) => setDealStage(event.target.value)}
+                className="mt-2 w-full rounded-xl border px-4 py-3 text-sm outline-none"
+              >
+                {STAGES.map((stage) => (
+                  <option key={stage.key} value={stage.key}>
+                    {stage.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {createDealMutation.isError && (
+            <p className="mt-3 text-sm text-red-600">
+              Deal could not be created:{" "}
+              {(createDealMutation.error as Error).message}
+            </p>
+          )}
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="submit"
+              disabled={
+                !selectedClientId ||
+                !dealTitle.trim() ||
+                createDealMutation.isPending
+              }
+              className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {createDealMutation.isPending ? "Creating..." : "Create Deal"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {successMessage && (
+        <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+          {successMessage}
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-2xl border bg-white p-5">

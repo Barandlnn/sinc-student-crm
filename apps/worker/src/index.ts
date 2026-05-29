@@ -669,6 +669,83 @@ app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   return c.json(data ?? []);
 });
 
+app.post("/api/deals", requireRoles("manager", "sales"), async (c) => {
+  const profile = c.get("profile");
+  const supabase = createSupabaseAdmin(c.env);
+
+  const body = await c.req.json<{
+    client_id?: string;
+    title?: string;
+    stage?: string;
+  }>();
+
+  const clientId = body.client_id?.trim();
+  const title = body.title?.trim();
+  const stage = body.stage?.trim() || "new_lead";
+
+  const allowedStages = [
+    "new_lead",
+    "contacted",
+    "consultation_booked",
+    "proposal_sent",
+    "won",
+    "lost",
+  ];
+
+  if (!clientId || !title) {
+    return c.json(
+      {
+        error: "Validation Error",
+        message: "Client and deal title are required.",
+      },
+      400
+    );
+  }
+
+  if (!allowedStages.includes(stage)) {
+    return c.json(
+      {
+        error: "Validation Error",
+        message: "Invalid deal stage.",
+      },
+      400
+    );
+  }
+
+  const { data: client, error: clientError } = await supabase
+    .from("clients")
+    .select("id")
+    .eq("id", clientId)
+    .single();
+
+  if (clientError || !client) {
+    return c.json(
+      {
+        error: clientError?.message ?? "Client not found.",
+      },
+      404
+    );
+  }
+
+  const { data: deal, error: dealError } = await supabase
+    .from("deals")
+    .insert({
+      client_id: clientId,
+      owner_id: profile.id,
+      title,
+      stage,
+    })
+    .select("*")
+    .single();
+
+  if (dealError) {
+    return c.json({ error: dealError.message }, 500);
+  }
+
+  return c.json(deal, 201);
+});
+
+
 app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
   const id = c.req.param("id");
   const supabase = createSupabaseAdmin(c.env);

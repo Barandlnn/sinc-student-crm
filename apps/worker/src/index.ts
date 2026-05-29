@@ -455,19 +455,18 @@ app.post(
     }
 
     const now = new Date().toISOString();
+    const senderType = profile.role === "client" ? "client" : "staff";
 
-const senderType = profile.role === "client" ? "client" : "staff";
-
-const { data: message, error: messageError } = await supabase
-  .from("conversation_messages")
-  .insert({
-    thread_id: threadId,
-    sender_id: profile.id,
-    sender_type: senderType,
-    body: messageBody,
-  })
-  .select("*")
-  .single();
+    const { data: message, error: messageError } = await supabase
+      .from("conversation_messages")
+      .insert({
+        thread_id: threadId,
+        sender_id: profile.id,
+        sender_type: senderType,
+        body: messageBody,
+      })
+      .select("*")
+      .single();
 
     if (messageError) {
       return c.json({ error: messageError.message }, 500);
@@ -486,6 +485,49 @@ const { data: message, error: messageError } = await supabase
     }
 
     return c.json(message, 201);
+  }
+);
+
+app.patch(
+  "/api/conversations/:id/assign-to-me",
+  requireRoles("manager", "sales"),
+  async (c) => {
+    const threadId = c.req.param("id");
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
+
+    const { data: thread, error: threadError } = await supabase
+      .from("conversation_threads")
+      .select("*")
+      .eq("id", threadId)
+      .single();
+
+    if (threadError || !thread) {
+      return c.json(
+        {
+          error: threadError?.message ?? "Conversation not found.",
+        },
+        404
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    const { data: updatedThread, error: updateError } = await supabase
+      .from("conversation_threads")
+      .update({
+        assigned_to: profile.id,
+        updated_at: now,
+      })
+      .eq("id", threadId)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return c.json({ error: updateError.message }, 500);
+    }
+
+    return c.json(updatedThread);
   }
 );
 

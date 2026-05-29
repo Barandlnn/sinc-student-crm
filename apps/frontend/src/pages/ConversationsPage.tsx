@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/apiClient";
+import { useAuth } from "@/lib/auth";
 
 type ConversationThread = {
   id: string;
@@ -30,12 +31,14 @@ type FilterType = "unassigned" | "mine" | "all";
 
 export function ConversationsPage() {
   const queryClient = useQueryClient();
+  const { profile } = useAuth();
 
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [selectedConversationId, setSelectedConversationId] =
     useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [assignSuccessMessage, setAssignSuccessMessage] = useState("");
 
   const {
     data,
@@ -100,6 +103,37 @@ export function ConversationsPage() {
     },
   });
 
+  const assignToMeMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedConversationId) {
+        throw new Error("No conversation selected.");
+      }
+
+      return apiRequest<ConversationThread>(
+        `/conversations/${selectedConversationId}/assign-to-me`,
+        {
+          method: "PATCH",
+        }
+      );
+    },
+
+    onSuccess: () => {
+      setAssignSuccessMessage("Conversation assigned to you.");
+
+      window.setTimeout(() => {
+        setAssignSuccessMessage("");
+      }, 3000);
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversations"],
+      });
+    },
+
+    onError: () => {
+      setAssignSuccessMessage("");
+    },
+  });
+
   const conversations = data ?? [];
   const messages = messagesData ?? [];
 
@@ -109,11 +143,13 @@ export function ConversationsPage() {
     }
 
     if (activeFilter === "mine") {
-      return conversations.filter((conversation) => conversation.assigned_to);
+      return conversations.filter((conversation) => {
+        return conversation.assigned_to === profile?.id;
+      });
     }
 
     return conversations;
-  }, [conversations, activeFilter]);
+  }, [conversations, activeFilter, profile?.id]);
 
   const selectedConversation =
     conversations.find(
@@ -129,6 +165,9 @@ export function ConversationsPage() {
 
     sendMessageMutation.mutate();
   }
+
+  const canAssignConversation =
+    profile?.role !== "client" && selectedConversation && !selectedConversation.assigned_to;
 
   if (isLoading) {
     return <p>Loading conversations...</p>;
@@ -253,6 +292,31 @@ export function ConversationsPage() {
                   {selectedConversation.assigned_to ?? "Unassigned"}
                 </span>
               </p>
+
+              {canAssignConversation && (
+                <button
+                  onClick={() => assignToMeMutation.mutate()}
+                  disabled={assignToMeMutation.isPending}
+                  className="mt-3 rounded-xl bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {assignToMeMutation.isPending
+                    ? "Assigning..."
+                    : "Assign to me"}
+                </button>
+              )}
+
+              {assignToMeMutation.isError && (
+                <p className="mt-2 text-sm text-red-600">
+                  Assignment failed:{" "}
+                  {(assignToMeMutation.error as Error).message}
+                </p>
+              )}
+
+              {assignSuccessMessage && (
+                <p className="mt-2 text-sm text-green-600">
+                  {assignSuccessMessage}
+                </p>
+              )}
             </div>
 
             <div className="rounded-xl border bg-slate-50 p-4">

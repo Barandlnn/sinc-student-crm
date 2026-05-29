@@ -28,6 +28,13 @@ type ConversationMessage = {
   created_at: string;
 };
 
+type StaffProfile = {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+  role: "manager" | "sales";
+};
+
 type FilterType = "unassigned" | "mine" | "all";
 
 export function ConversationsPage() {
@@ -45,6 +52,9 @@ export function ConversationsPage() {
   const [newSubject, setNewSubject] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [createChatSuccessMessage, setCreateChatSuccessMessage] = useState("");
+
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState("");
+  const [reassignSuccessMessage, setReassignSuccessMessage] = useState("");
 
   const {
     data,
@@ -68,6 +78,17 @@ export function ConversationsPage() {
         `/conversations/${selectedConversationId}/messages`
       ),
     enabled: Boolean(selectedConversationId),
+  });
+
+  const {
+    data: staffData,
+    isLoading: isStaffLoading,
+    isError: isStaffError,
+    error: staffError,
+  } = useQuery<StaffProfile[]>({
+    queryKey: ["staff"],
+    queryFn: () => apiRequest<StaffProfile[]>("/staff"),
+    enabled: profile?.role === "manager",
   });
 
   const createConversationMutation = useMutation({
@@ -176,8 +197,47 @@ export function ConversationsPage() {
     },
   });
 
+  const reassignConversationMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedConversationId) {
+        throw new Error("No conversation selected.");
+      }
+
+      if (!selectedAssigneeId) {
+        throw new Error("No assignee selected.");
+      }
+
+      return apiRequest<ConversationThread>(
+        `/conversations/${selectedConversationId}/assign`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            assigned_to: selectedAssigneeId,
+          }),
+        }
+      );
+    },
+
+    onSuccess: () => {
+      setReassignSuccessMessage("Conversation reassigned successfully.");
+
+      window.setTimeout(() => {
+        setReassignSuccessMessage("");
+      }, 3000);
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversations"],
+      });
+    },
+
+    onError: () => {
+      setReassignSuccessMessage("");
+    },
+  });
+
   const conversations = data ?? [];
   const messages = messagesData ?? [];
+  const staff = staffData ?? [];
 
   const filteredConversations = useMemo(() => {
     if (activeFilter === "unassigned") {
@@ -342,7 +402,10 @@ export function ConversationsPage() {
             filteredConversations.map((conversation) => (
               <button
                 key={conversation.id}
-                onClick={() => setSelectedConversationId(conversation.id)}
+                onClick={() => {
+                  setSelectedConversationId(conversation.id);
+                  setSelectedAssigneeId(conversation.assigned_to ?? "");
+                }}
                 className={`w-full rounded-xl border p-4 text-left ${
                   selectedConversationId === conversation.id
                     ? "border-slate-950 bg-slate-50"
@@ -432,6 +495,75 @@ export function ConversationsPage() {
                 <p className="mt-2 text-sm text-green-600">
                   {assignSuccessMessage}
                 </p>
+              )}
+
+              {profile?.role === "manager" && (
+                <div className="mt-4 rounded-xl border border-dashed p-4">
+                  <h3 className="text-sm font-semibold">
+                    Manager Reassignment
+                  </h3>
+
+                  <p className="mt-1 text-sm text-slate-600">
+                    Reassign this conversation to another team member.
+                  </p>
+
+                  <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                    <select
+                      value={selectedAssigneeId}
+                      onChange={(event) =>
+                        setSelectedAssigneeId(event.target.value)
+                      }
+                      className="w-full rounded-xl border px-4 py-3 text-sm outline-none md:max-w-sm"
+                    >
+                      <option value="">Select assignee</option>
+
+                      {staff.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.full_name ?? item.email} — {item.role}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      onClick={() => reassignConversationMutation.mutate()}
+                      disabled={
+                        !selectedAssigneeId ||
+                        reassignConversationMutation.isPending
+                      }
+                      className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {reassignConversationMutation.isPending
+                        ? "Reassigning..."
+                        : "Reassign Conversation"}
+                    </button>
+                  </div>
+
+                  {isStaffLoading && (
+                    <p className="mt-2 text-sm text-slate-500">
+                      Loading staff...
+                    </p>
+                  )}
+
+                  {isStaffError && (
+                    <p className="mt-2 text-sm text-red-600">
+                      Staff could not be loaded:{" "}
+                      {(staffError as Error).message}
+                    </p>
+                  )}
+
+                  {reassignConversationMutation.isError && (
+                    <p className="mt-2 text-sm text-red-600">
+                      Reassignment failed:{" "}
+                      {(reassignConversationMutation.error as Error).message}
+                    </p>
+                  )}
+
+                  {reassignSuccessMessage && (
+                    <p className="mt-2 text-sm text-green-600">
+                      {reassignSuccessMessage}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 

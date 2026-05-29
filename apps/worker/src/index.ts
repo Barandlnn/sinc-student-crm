@@ -157,6 +157,22 @@ app.get("/api/me", async (c) => {
   });
 });
 
+app.get("/api/staff", requireRoles("manager", "sales"), async (c) => {
+  const supabase = createSupabaseAdmin(c.env);
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, email, full_name, role")
+    .in("role", ["manager", "sales"])
+    .order("full_name", { ascending: true });
+
+  if (error) {
+    return c.json({ error: error.message }, 500);
+  }
+
+  return c.json(data ?? []);
+});
+
 app.get("/api/dashboard", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 
@@ -653,8 +669,69 @@ app.patch(
   }
 );
 
-app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
+app.patch(
+  "/api/conversations/:id/assign",
+  requireRoles("manager"),
+  async (c) => {
+    const threadId = c.req.param("id");
+    const supabase = createSupabaseAdmin(c.env);
 
+    const body = await c.req.json<{
+      assigned_to?: string;
+    }>();
+
+    const assignedTo = body.assigned_to?.trim();
+
+    if (!assignedTo) {
+      return c.json(
+        {
+          error: "Validation Error",
+          message: "assigned_to is required.",
+        },
+        400
+      );
+    }
+
+    const { data: assignee, error: assigneeError } = await supabase
+      .from("profiles")
+      .select("id, email, full_name, role")
+      .eq("id", assignedTo)
+      .in("role", ["manager", "sales"])
+      .single();
+
+    if (assigneeError || !assignee) {
+      return c.json(
+        {
+          error: assigneeError?.message ?? "Assignee not found.",
+        },
+        404
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    const { data: updatedThread, error: updateError } = await supabase
+      .from("conversation_threads")
+      .update({
+        assigned_to: assignee.id,
+        updated_at: now,
+      })
+      .eq("id", threadId)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      return c.json({ error: updateError.message }, 500);
+    }
+
+    return c.json({
+      ...updatedThread,
+      assigned_to_name: assignee.full_name ?? assignee.email ?? "Unknown User",
+    });
+  }
+);
+
+app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 
   const { data, error } = await supabase
@@ -745,7 +822,6 @@ app.post("/api/deals", requireRoles("manager", "sales"), async (c) => {
   return c.json(deal, 201);
 });
 
-
 app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
   const id = c.req.param("id");
   const supabase = createSupabaseAdmin(c.env);
@@ -763,7 +839,6 @@ app.get("/api/deals/:id", requireRoles("manager", "sales"), async (c) => {
   return c.json(data);
 });
 
-// BURAYA EKLE
 app.patch(
   "/api/deals/:id/stage",
   requireRoles("manager", "sales"),
@@ -823,12 +898,7 @@ app.patch(
       .single();
 
     if (updateError) {
-      return c.json(
-        {
-          error: updateError.message,
-        },
-        500
-      );
+      return c.json({ error: updateError.message }, 500);
     }
 
     const { error: historyError } = await supabase
@@ -855,6 +925,7 @@ app.patch(
     return c.json(updatedDeal);
   }
 );
+
 app.notFound((c) => {
   return c.json(
     {

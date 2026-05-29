@@ -1,5 +1,9 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, type FormEvent } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiRequest } from "@/lib/apiClient";
 
 type ConversationThread = {
@@ -16,7 +20,8 @@ type ConversationThread = {
 type ConversationMessage = {
   id: string;
   thread_id: string;
-  sender_profile_id: string | null;
+  sender_id: string | null;
+  sender_type: "client" | "staff";
   body: string;
   created_at: string;
 };
@@ -24,9 +29,13 @@ type ConversationMessage = {
 type FilterType = "unassigned" | "mine" | "all";
 
 export function ConversationsPage() {
+  const queryClient = useQueryClient();
+
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const [selectedConversationId, setSelectedConversationId] =
     useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const {
     data,
@@ -52,6 +61,45 @@ export function ConversationsPage() {
     enabled: Boolean(selectedConversationId),
   });
 
+  const sendMessageMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedConversationId) {
+        throw new Error("No conversation selected.");
+      }
+
+      return apiRequest<ConversationMessage>(
+        `/conversations/${selectedConversationId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: replyText,
+          }),
+        }
+      );
+    },
+
+    onSuccess: () => {
+      setReplyText("");
+      setSuccessMessage("Message sent successfully.");
+
+      window.setTimeout(() => {
+        setSuccessMessage("");
+      }, 3000);
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversation-messages", selectedConversationId],
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["conversations"],
+      });
+    },
+
+    onError: () => {
+      setSuccessMessage("");
+    },
+  });
+
   const conversations = data ?? [];
   const messages = messagesData ?? [];
 
@@ -71,6 +119,16 @@ export function ConversationsPage() {
     conversations.find(
       (conversation) => conversation.id === selectedConversationId
     ) ?? null;
+
+  function handleSendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!replyText.trim()) {
+      return;
+    }
+
+    sendMessageMutation.mutate();
+  }
 
   if (isLoading) {
     return <p>Loading conversations...</p>;
@@ -227,7 +285,14 @@ export function ConversationsPage() {
                     key={message.id}
                     className="rounded-xl border bg-white p-4"
                   >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs capitalize text-slate-600">
+                        {message.sender_type}
+                      </span>
+                    </div>
+
                     <p className="text-sm">{message.body}</p>
+
                     <p className="mt-2 text-xs text-slate-500">
                       {new Date(message.created_at).toLocaleString()}
                     </p>
@@ -236,9 +301,45 @@ export function ConversationsPage() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-dashed p-4 text-sm text-slate-500">
-              Reply form will be implemented next.
-            </div>
+            <form
+              onSubmit={handleSendMessage}
+              className="rounded-xl border border-dashed p-4"
+            >
+              <label className="text-sm font-medium">Reply</label>
+
+              <textarea
+                value={replyText}
+                onChange={(event) => setReplyText(event.target.value)}
+                placeholder="Write a message..."
+                rows={4}
+                className="mt-2 w-full resize-none rounded-xl border px-4 py-3 text-sm outline-none"
+              />
+
+              {sendMessageMutation.isError && (
+                <p className="mt-2 text-sm text-red-600">
+                  Message could not be sent:{" "}
+                  {(sendMessageMutation.error as Error).message}
+                </p>
+              )}
+
+              {successMessage && (
+                <p className="mt-2 text-sm text-green-600">
+                  {successMessage}
+                </p>
+              )}
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={!replyText.trim() || sendMessageMutation.isPending}
+                  className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {sendMessageMutation.isPending
+                    ? "Sending..."
+                    : "Send Message"}
+                </button>
+              </div>
+            </form>
           </div>
         ) : (
           <div className="flex min-h-60 items-center justify-center text-sm text-slate-500">

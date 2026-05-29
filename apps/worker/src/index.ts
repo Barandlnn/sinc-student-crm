@@ -336,6 +336,7 @@ app.get(
     return c.json(data ?? []);
   }
 );
+
 app.get(
   "/api/conversations/:id/messages",
   requireRoles("manager", "sales", "client"),
@@ -394,6 +395,100 @@ app.get(
     return c.json(messages ?? []);
   }
 );
+
+app.post(
+  "/api/conversations/:id/messages",
+  requireRoles("manager", "sales", "client"),
+  async (c) => {
+    const threadId = c.req.param("id");
+    const profile = c.get("profile");
+    const supabase = createSupabaseAdmin(c.env);
+
+    const body = await c.req.json<{ body?: string }>();
+    const messageBody = body.body?.trim();
+
+    if (!messageBody) {
+      return c.json(
+        {
+          error: "Validation Error",
+          message: "Message body is required.",
+        },
+        400
+      );
+    }
+
+    const { data: thread, error: threadError } = await supabase
+      .from("conversation_threads")
+      .select("*")
+      .eq("id", threadId)
+      .single();
+
+    if (threadError || !thread) {
+      return c.json(
+        {
+          error: threadError?.message ?? "Conversation not found.",
+        },
+        404
+      );
+    }
+
+    if (profile.role === "client") {
+      const { data: client, error: clientError } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("email", profile.email)
+        .maybeSingle();
+
+      if (clientError) {
+        return c.json({ error: clientError.message }, 500);
+      }
+
+      if (!client || thread.client_id !== client.id) {
+        return c.json(
+          {
+            error: "Forbidden",
+            message: "You can only send messages to your own conversations.",
+          },
+          403
+        );
+      }
+    }
+
+    const now = new Date().toISOString();
+
+const senderType = profile.role === "client" ? "client" : "staff";
+
+const { data: message, error: messageError } = await supabase
+  .from("conversation_messages")
+  .insert({
+    thread_id: threadId,
+    sender_id: profile.id,
+    sender_type: senderType,
+    body: messageBody,
+  })
+  .select("*")
+  .single();
+
+    if (messageError) {
+      return c.json({ error: messageError.message }, 500);
+    }
+
+    const { error: updateThreadError } = await supabase
+      .from("conversation_threads")
+      .update({
+        last_message_at: now,
+        updated_at: now,
+      })
+      .eq("id", threadId);
+
+    if (updateThreadError) {
+      return c.json({ error: updateThreadError.message }, 500);
+    }
+
+    return c.json(message, 201);
+  }
+);
+
 app.get("/api/deals", requireRoles("manager", "sales"), async (c) => {
   const supabase = createSupabaseAdmin(c.env);
 

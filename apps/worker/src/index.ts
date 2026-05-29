@@ -296,90 +296,81 @@ app.get("/api/clients", requireRoles("manager", "sales"), async (c) => {
   return c.json(data ?? []);
 });
 
-app.get("/api/clients/:id", requireRoles("manager", "sales"), async (c) => {
-  const id = c.req.param("id");
-  const supabase = createSupabaseAdmin(c.env);
-
-  const { data, error } = await supabase
-    .from("clients")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  if (error) {
-    return c.json({ error: error.message }, 500);
-  }
-
-  return c.json(data);
-});
-
 app.get(
-  "/api/conversations",
-  requireRoles("manager", "sales", "client"),
+  "/api/clients/:id",
+  requireRoles("manager", "sales"),
   async (c) => {
-    const profile = c.get("profile");
+    const clientId = c.req.param("id");
     const supabase = createSupabaseAdmin(c.env);
 
-    let query = supabase
+    const { data: client, error: clientError } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("id", clientId)
+      .maybeSingle();
+
+    if (clientError) {
+      return c.json({ error: clientError.message }, 500);
+    }
+
+    if (!client) {
+      return c.json({ error: "Client not found" }, 404);
+    }
+
+    const { data: conversations, error: conversationsError } = await supabase
       .from("conversation_threads")
       .select("*")
-      .order("created_at", { ascending: false });
+      .eq("client_id", clientId)
+      .order("last_message_at", { ascending: false });
 
-    if (profile.role === "client") {
-      const { data: client, error: clientError } = await supabase
-        .from("clients")
-        .select("id")
-        .eq("email", profile.email)
-        .maybeSingle();
-
-      if (clientError) {
-        return c.json({ error: clientError.message }, 500);
-      }
-
-      if (!client) {
-        return c.json([]);
-      }
-
-      query = query.eq("client_id", client.id);
+    if (conversationsError) {
+      return c.json({ error: conversationsError.message }, 500);
     }
 
-    const { data, error } = await query;
+    const { data: deals, error: dealsError } = await supabase
+      .from("deals")
+      .select("*")
+      .eq("client_id", clientId)
+      .order("updated_at", { ascending: false });
 
-    if (error) {
-      return c.json({ error: error.message }, 500);
+    if (dealsError) {
+      return c.json({ error: dealsError.message }, 500);
     }
 
-    const conversations = (data ?? []) as any[];
+    const conversationActivity = ((conversations ?? []) as any[]).map(
+      (conversation) => ({
+        id: `conversation-${conversation.id}`,
+        type: "conversation",
+        title: conversation.title ?? conversation.subject ?? "Conversation",
+        description: conversation.assigned_to
+          ? "Conversation assigned"
+          : "Conversation unassigned",
+        timestamp: conversation.last_message_at ?? conversation.created_at,
+      })
+    );
 
-    const { data: profiles, error: profilesError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email");
+    const dealActivity = ((deals ?? []) as any[]).map((deal) => ({
+      id: `deal-${deal.id}`,
+      type: "deal",
+      title: deal.title,
+      description: `Deal stage: ${deal.stage}`,
+      timestamp: deal.updated_at ?? deal.created_at,
+    }));
 
-    if (profilesError) {
-      return c.json({ error: profilesError.message }, 500);
-    }
+    const activity = [...conversationActivity, ...dealActivity]
+      .filter((item) => Boolean(item.timestamp))
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      )
+      .slice(0, 10);
 
-    const profileNameById = new Map<string, string>();
-
-    for (const item of profiles ?? []) {
-      profileNameById.set(
-        item.id,
-        item.full_name ?? item.email ?? "Unknown User"
-      );
-    }
-
-    const enrichedConversations = conversations.map((conversation) => {
-      const assignedTo = conversation.assigned_to as string | null;
-
-      return {
-        ...conversation,
-        assigned_to_name: assignedTo
-          ? profileNameById.get(assignedTo) ?? assignedTo
-          : null,
-      };
+    return c.json({
+      client,
+      conversations: conversations ?? [],
+      deals: deals ?? [],
+      activity,
     });
-
-    return c.json(enrichedConversations);
   }
 );
 

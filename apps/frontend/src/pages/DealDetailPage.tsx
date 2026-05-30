@@ -338,21 +338,29 @@ export function DealDetailPage() {
             </label>
 
             <select
-              value={deal.owner_id ?? ""}
-              onChange={(event) =>
-                reassignOwnerMutation.mutate(event.target.value)
-              }
-              disabled={staffQuery.isLoading || reassignOwnerMutation.isPending}
-              className="mt-2 w-full rounded-xl border px-4 py-2 text-sm"
-            >
-              <option value="">Select owner</option>
+            value={deal.owner_id ?? ""}
+            onChange={(event) => {
+              const ownerId = event.target.value;
 
-              {staffQuery.data?.map((staff) => (
-                <option key={staff.id} value={staff.id}>
-                  {staff.full_name ?? staff.email} - {staff.role}
-                </option>
-              ))}
-            </select>
+              if (!ownerId) {
+                return;
+              }
+
+              reassignOwnerMutation.mutate(ownerId);
+            }}
+            disabled={staffQuery.isLoading || reassignOwnerMutation.isPending}
+            className="mt-2 w-full rounded-xl border px-4 py-2 text-sm"
+          >
+            <option value="" disabled>
+              Select owner
+            </option>
+
+            {staffQuery.data?.map((staff) => (
+              <option key={staff.id} value={staff.id}>
+                {staff.full_name ?? staff.email} - {staff.role}
+              </option>
+            ))}
+          </select>
           </div>
 
           {staffQuery.isLoading && (

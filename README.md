@@ -4,11 +4,12 @@ A full-stack CRM application developed as a technical test project. The system a
 
 ## Live Deployment
 
-- Frontend URL: `TO_BE_ADDED`
-- Worker API URL: `TO_BE_ADDED`
-- Public Repository: `TO_BE_ADDED`
+* Frontend URL: `https://sinc-student-crm.pages.dev`
+* Worker API URL: `https://sinc-student-crm-worker.baran-dev-2026.workers.dev`
+* Public Repository: `https://github.com/Barandlnn/sinc-student-crm`
 
-> The live URLs will be added after the Cloudflare deployment step.
+> The frontend and Worker API have been deployed to Cloudflare.
+
 
 ---
 

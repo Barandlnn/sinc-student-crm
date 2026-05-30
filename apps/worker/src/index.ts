@@ -25,7 +25,28 @@ const app = new Hono<{
 app.use(
   "/api/*",
   cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: (origin) => {
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://sinc-student-crm.pages.dev",
+      ];
+
+      // Local development ve production domain
+      if (allowedOrigins.includes(origin)) {
+        return origin;
+      }
+
+      // Cloudflare Pages hash tabanlı deployment adresleri
+      // Örnek: https://a304e8f4.sinc-student-crm.pages.dev
+      if (
+        /^https:\/\/[a-z0-9-]+\.sinc-student-crm\.pages\.dev$/.test(origin)
+      ) {
+        return origin;
+      }
+
+      return "";
+    },
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   })

@@ -1,19 +1,43 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/apiClient";
 
+type RecentActivity = {
+  id: string;
+  type: "conversation" | "deal" | string;
+  title: string;
+  description: string;
+  timestamp: string;
+};
+
 type DashboardResponse = {
-  conversationsByStatus?: {
-    open?: number;
-    pending?: number;
-    closed?: number;
-  };
+  openChats?: number;
+  open_chats?: number;
+
+  unassigned?: number;
   unassignedConversations?: number;
+  unassigned_conversations?: number;
+
+  activeDeals?: number;
+  active_deals?: number;
+
+  wonDeals?: number;
+  won_deals?: number;
+
   dealsByStage?: Record<string, number>;
-  dealsByOwner?: {
-    ownerName: string;
-    count: number;
-  }[];
-  recentActivity?: string[];
+  deals_by_stage?: Record<string, number>;
+
+  dealsByOwner?: Record<string, number>;
+  deals_by_owner?: Record<string, number>;
+
+  recentActivity?: RecentActivity[];
+  recent_activity?: RecentActivity[];
+
+  stats?: {
+    openChats?: number;
+    unassignedConversations?: number;
+    activeDeals?: number;
+    wonDeals?: number;
+  };
 };
 
 export function DashboardPage() {
@@ -43,30 +67,59 @@ export function DashboardPage() {
     return <p>No dashboard data found.</p>;
   }
 
-  const conversationsByStatus = data.conversationsByStatus ?? {
-    open: 0,
-    pending: 0,
-    closed: 0,
-  };
+  const dealsByStage =
+    data.dealsByStage ??
+    data.deals_by_stage ??
+    {};
 
-  const dealsByStage = data.dealsByStage ?? {};
-  const dealsByOwner = data.dealsByOwner ?? [];
-  const recentActivity = data.recentActivity ?? [];
+  const dealsByOwner =
+    data.dealsByOwner ??
+    data.deals_by_owner ??
+    {};
 
-  const activeDeals = Object.entries(dealsByStage)
+  const recentActivity =
+    data.recentActivity ??
+    data.recent_activity ??
+    [];
+
+  const calculatedActiveDeals = Object.entries(dealsByStage)
     .filter(([stage]) => stage !== "won" && stage !== "lost")
     .reduce((total, [, count]) => total + count, 0);
 
-  const wonDeals = dealsByStage.won ?? 0;
+  const openChats =
+    data.stats?.openChats ??
+    data.openChats ??
+    data.open_chats ??
+    0;
+
+  const unassignedConversations =
+    data.stats?.unassignedConversations ??
+    data.unassignedConversations ??
+    data.unassigned_conversations ??
+    data.unassigned ??
+    0;
+
+  const activeDeals =
+    data.stats?.activeDeals ??
+    data.activeDeals ??
+    data.active_deals ??
+    calculatedActiveDeals;
+
+  const wonDeals =
+    data.stats?.wonDeals ??
+    data.wonDeals ??
+    data.won_deals ??
+    dealsByStage.won ??
+    0;
 
   const stats = [
     {
       label: "Open Chats",
-      value: conversationsByStatus.open ?? 0,
+      value: openChats,
     },
     {
       label: "Unassigned",
-      value: data.unassignedConversations ?? 0,
+      value: unassignedConversations,
     },
     {
       label: "Active Deals",
@@ -98,28 +151,17 @@ export function DashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border bg-white p-5">
-          <h2 className="font-semibold">Conversations by Status</h2>
+          <h2 className="font-semibold">Conversation Summary</h2>
 
           <div className="mt-4 space-y-2 text-sm">
             <div className="flex justify-between">
-              <span>Open</span>
-              <span className="font-medium">
-                {conversationsByStatus.open ?? 0}
-              </span>
+              <span>Open Chats</span>
+              <span className="font-medium">{openChats}</span>
             </div>
 
             <div className="flex justify-between">
-              <span>Pending</span>
-              <span className="font-medium">
-                {conversationsByStatus.pending ?? 0}
-              </span>
-            </div>
-
-            <div className="flex justify-between">
-              <span>Closed</span>
-              <span className="font-medium">
-                {conversationsByStatus.closed ?? 0}
-              </span>
+              <span>Unassigned</span>
+              <span className="font-medium">{unassignedConversations}</span>
             </div>
           </div>
         </div>
@@ -149,13 +191,13 @@ export function DashboardPage() {
           <h2 className="font-semibold">Deals by Owner</h2>
 
           <div className="mt-4 space-y-2 text-sm">
-            {dealsByOwner.length === 0 ? (
+            {Object.entries(dealsByOwner).length === 0 ? (
               <p className="text-slate-500">No owner data found.</p>
             ) : (
-              dealsByOwner.map((item) => (
-                <div key={item.ownerName} className="flex justify-between">
-                  <span>{item.ownerName}</span>
-                  <span className="font-medium">{item.count}</span>
+              Object.entries(dealsByOwner).map(([ownerName, count]) => (
+                <div key={ownerName} className="flex justify-between">
+                  <span>{ownerName}</span>
+                  <span className="font-medium">{count}</span>
                 </div>
               ))
             )}
@@ -165,12 +207,22 @@ export function DashboardPage() {
         <div className="rounded-2xl border bg-white p-5">
           <h2 className="font-semibold">Recent Activity</h2>
 
-          <div className="mt-4 space-y-2 text-sm text-slate-600">
+          <div className="mt-4 space-y-3 text-sm text-slate-600">
             {recentActivity.length === 0 ? (
               <p>No recent activity found.</p>
             ) : (
               recentActivity.map((activity) => (
-                <p key={activity}>{activity}</p>
+                <div key={activity.id} className="rounded-xl border p-3">
+                  <p className="font-medium text-slate-900">
+                    {activity.title}
+                  </p>
+
+                  <p className="mt-1">{activity.description}</p>
+
+                  <p className="mt-1 text-xs text-slate-400">
+                    {new Date(activity.timestamp).toLocaleString()}
+                  </p>
+                </div>
               ))
             )}
           </div>

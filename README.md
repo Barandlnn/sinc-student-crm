@@ -377,4 +377,4 @@ The core MVP flows are complete:
 
 ## Author
 
-Developed by Baran as a full-stack developer technical test project.
+Developed by Baran Dilan as a full-stack developer technical test project.

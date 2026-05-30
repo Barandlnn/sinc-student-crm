@@ -579,7 +579,8 @@ app.post(
       first_message?: string;
     }>();
 
-    const title = body.title ?? body.subject ?? "New Conversation";
+    
+    const subject = body.subject ?? body.title ?? "New Conversation";
     const message = body.body ?? body.message ?? body.first_message;
 
     if (!message || !message.trim()) {
@@ -606,7 +607,7 @@ app.post(
       .from("conversation_threads")
       .insert({
         client_id: client.id,
-        title,
+        subject,
         status: "open",
         last_message_at: now,
       })
